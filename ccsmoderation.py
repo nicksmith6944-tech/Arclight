@@ -78,7 +78,8 @@ def init_database() -> None:
 
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
-                modlog_channel_id INTEGER
+                modlog_channel_id INTEGER,
+                prefix TEXT NOT NULL DEFAULT ','
             );
             """
         )
@@ -92,6 +93,39 @@ def init_database() -> None:
             conn.execute(
                 "ALTER TABLE mod_logs ADD COLUMN reason TEXT NOT NULL DEFAULT 'No reason provided'"
             )
+
+        settings_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(guild_settings)").fetchall()
+        }
+        if "prefix" not in settings_columns:
+            conn.execute(
+                "ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','"
+            )
+
+
+def get_guild_prefix(guild: Optional[discord.Guild]) -> str:
+    if guild is None:
+        return PREFIX
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT prefix FROM guild_settings WHERE guild_id = ?",
+            (guild.id,),
+        ).fetchone()
+    return str(row["prefix"]) if row and row["prefix"] else PREFIX
+
+
+def set_guild_prefix(guild: discord.Guild, prefix: str) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT INTO guild_settings (guild_id, prefix) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET prefix = excluded.prefix",
+            (guild.id, prefix),
+        )
+
+
+def get_command_prefix(bot: commands.Bot, message: discord.Message):
+    return get_guild_prefix(message.guild)
 
 
 def get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -180,7 +214,7 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(
-    command_prefix=PREFIX,
+    command_prefix=get_command_prefix,
     intents=intents,
     case_insensitive=True,
     help_command=None,
@@ -519,7 +553,7 @@ async def help_command(ctx: commands.Context):
     embed = discord.Embed(
         title="📖 Moderation Bot — Help",
         description=(
-            f"Prefix: `{PREFIX}`\n\n"
+            f"Prefix: `{get_guild_prefix(ctx.guild)}`\n\n"
             "**Arguments:** `<required>` • `(optional)`"
         ),
         color=discord.Color.blurple(),
@@ -528,79 +562,84 @@ async def help_command(ctx: commands.Context):
     commands_list = [
         (
             "🧹 Purge",
-            f"`{PREFIX}purge <user_id> <amount>`\n"
-            f"`{PREFIX}purge <user_id>`\n"
+            f"`{get_guild_prefix(ctx.guild)}purge <user_id> <amount>`\n"
+            f"`{get_guild_prefix(ctx.guild)}purge <user_id>`\n"
             "Deletes messages from a specific user in the current channel.",
         ),
         (
             "🧹 Clean",
-            f"`{PREFIX}clean`\n"
+            f"`{get_guild_prefix(ctx.guild)}clean`\n"
             "Deletes the 10 most recent bot messages in the channel.",
         ),
         (
             "⚠️ Warn",
-            f"`{PREFIX}warn <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}warn <user> (reason)`\n"
             "Warns a member and increases their warning count.\n"
-            f"`{PREFIX}warns <user>`\n"
+            f"`{get_guild_prefix(ctx.guild)}warns <user>`\n"
             "Shows a member's warning count and recent warnings.\n"
-            f"`{PREFIX}modlogs <user>`\n"
+            f"`{get_guild_prefix(ctx.guild)}modlogs <user>`\n"
             "Shows a member's recent moderation history.",
         ),
         (
             "🔇 Mute",
-            f"`{PREFIX}mute <user> <duration> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}mute <user> <duration> (reason)`\n"
             "Times out a member. Duration: `30s`, `10m`, `2h`, `7d`.",
         ),
         (
             "🔊 Unmute",
-            f"`{PREFIX}unmute <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}unmute <user> (reason)`\n"
             "Removes a member's timeout.",
         ),
         (
             "🔒 Jail",
-            f"`{PREFIX}jail <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}jail <user> (reason)`\n"
             "Removes the member's roles and gives them the Jailed role.",
         ),
         (
             "🔓 Unjail",
-            f"`{PREFIX}unjail <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}unjail <user> (reason)`\n"
             "Removes Jailed and restores the roles saved during jail.",
         ),
         (
             "🔨 Ban",
-            f"`{PREFIX}ban <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}ban <user> (reason)`\n"
             "Permanently bans a member.",
         ),
         (
             "🔓 Unban",
-            f"`{PREFIX}unban <user_id> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}unban <user_id> (reason)`\n"
             "Unbans a user by ID.",
         ),
         (
             "👢 Kick",
-            f"`{PREFIX}kick <user> (reason)`\n"
+            f"`{get_guild_prefix(ctx.guild)}kick <user> (reason)`\n"
             "Kicks a member from the server.",
         ),
         (
+            "⚙️ Prefix",
+            f"`{get_guild_prefix(ctx.guild)}setprefix <prefix>` — Change the bot prefix.\n"
+            f"`{get_guild_prefix(ctx.guild)}setprefix default` — Reset it to `,`.",
+        ),
+        (
             "📋 Mod-Log Channel",
-            f"`{PREFIX}setlogs #channel` — Set the moderation log channel.\n"
-            f"`{PREFIX}setlogs off` — Disable the custom channel.\n"
-            f"`{PREFIX}logs` — Show the current log channel.",
+            f"`{get_guild_prefix(ctx.guild)}setlogs #channel` — Set the moderation log channel.\n"
+            f"`{get_guild_prefix(ctx.guild)}setlogs off` — Disable the custom channel.\n"
+            f"`{get_guild_prefix(ctx.guild)}logs` — Show the current log channel.",
         ),
         (
             "📊 Moderation Stats",
-            f"`{PREFIX}ms`\n"
-            f"`{PREFIX}ms <user_id>`\n"
+            f"`{get_guild_prefix(ctx.guild)}ms`\n"
+            f"`{get_guild_prefix(ctx.guild)}ms <user_id>`\n"
             "Shows 7-day, 30-day and all-time moderation statistics.",
         ),
         (
             "🏷️ Force Nickname",
-            f"`{PREFIX}forcenick <user> <nickname>`\n"
+            f"`{get_guild_prefix(ctx.guild)}forcenick <user> <nickname>`\n"
             "Sets and continuously enforces a nickname.",
         ),
         (
             "🏷️ Remove Forced Nickname",
-            f"`{PREFIX}unforcenick <user>`\n"
+            f"`{get_guild_prefix(ctx.guild)}unforcenick <user>`\n"
             "Removes the nickname lock.",
         ),
     ]
@@ -1267,6 +1306,42 @@ async def unban(
         user,
         reason,
     )
+
+
+# ============================================================
+# PREFIX SETTINGS
+# ============================================================
+
+@bot.command(name="setprefix")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
+    """Set or reset this server's bot command prefix."""
+    current = get_guild_prefix(ctx.guild)
+
+    if new_prefix is None:
+        await ctx.send(
+            f"⚙️ Current prefix: `{current}`\n"
+            f"Use `{current}setprefix <new_prefix>` to change it.\n"
+            f"Use `{current}setprefix default` to reset it to `,`."
+        )
+        return
+
+    new_prefix = new_prefix.strip()
+    if new_prefix.casefold() == "default":
+        new_prefix = PREFIX
+    if not new_prefix:
+        await send_error(ctx, "❌ The prefix cannot be empty.")
+        return
+    if len(new_prefix) > 5:
+        await send_error(ctx, "❌ The prefix cannot be longer than 5 characters.")
+        return
+    if any(char.isspace() for char in new_prefix):
+        await send_error(ctx, "❌ The prefix cannot contain spaces.")
+        return
+
+    set_guild_prefix(ctx.guild, new_prefix)
+    await ctx.send(f"✅ Prefix changed from `{current}` to `{new_prefix}`.")
 
 
 # ============================================================
