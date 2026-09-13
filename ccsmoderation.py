@@ -443,6 +443,16 @@ async def on_ready():
     print(f"✅ {bot.user} is online!")
     print(f"📡 Connected to {len(bot.guilds)} guild(s).")
 
+    # Sync regular hybrid commands as Discord slash commands.
+    # Easter-egg commands intentionally remain prefix-only.
+    if not getattr(bot, "_slash_commands_synced", False):
+        try:
+            synced = await bot.tree.sync()
+            bot._slash_commands_synced = True
+            print(f"🔄 Synced {len(synced)} slash command(s).")
+        except discord.HTTPException as error:
+            print(f"⚠️ Failed to sync slash commands: {error}")
+
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
@@ -546,7 +556,7 @@ async def on_member_update(
 # HELP
 # ============================================================
 
-@bot.command(name="help")
+@bot.hybrid_command(name="help")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def help_command(ctx: commands.Context):
@@ -656,7 +666,7 @@ async def help_command(ctx: commands.Context):
 # CLEAN
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 @commands.bot_has_permissions(manage_messages=True)
@@ -699,7 +709,7 @@ async def clean(ctx: commands.Context):
 # PURGE
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 @commands.bot_has_permissions(manage_messages=True)
@@ -781,7 +791,7 @@ async def purge(
 # WARN
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 async def warn(
@@ -828,7 +838,7 @@ async def warn(
 # MUTE / TIMEOUT
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(moderate_members=True)
@@ -902,7 +912,7 @@ async def mute(
 # UNMUTE
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(moderate_members=True)
@@ -959,7 +969,7 @@ async def unmute(
 # JAIL / UNJAIL
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(manage_roles=True)
@@ -1063,7 +1073,7 @@ async def jail(
     )
 
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(manage_roles=True)
@@ -1157,7 +1167,7 @@ async def unjail(
 # BAN / UNBAN / KICK
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(ban_members=True)
 @commands.bot_has_permissions(ban_members=True)
@@ -1205,7 +1215,7 @@ async def ban(
     )
 
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(kick_members=True)
 @commands.bot_has_permissions(kick_members=True)
@@ -1253,7 +1263,7 @@ async def kick(
     )
 
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(ban_members=True)
 @commands.bot_has_permissions(ban_members=True)
@@ -1312,7 +1322,7 @@ async def unban(
 # PREFIX SETTINGS
 # ============================================================
 
-@bot.command(name="setprefix")
+@bot.hybrid_command(name="setprefix")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
@@ -1348,7 +1358,7 @@ async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
 # MOD-LOG CHANNEL SETTINGS
 # ============================================================
 
-@bot.command(name="setlogs")
+@bot.hybrid_command(name="setlogs")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
@@ -1415,7 +1425,7 @@ async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
     await ctx.send(f"✅ Moderation logs will now be sent to {channel.mention}.")
 
 
-@bot.command(name="logs")
+@bot.hybrid_command(name="logs")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def logs_channel(ctx: commands.Context):
@@ -1447,7 +1457,7 @@ async def logs_channel(ctx: commands.Context):
 # WARNINGS / MODERATION LOGS
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def warns(
@@ -1521,7 +1531,7 @@ async def warns(
     await ctx.send(embed=embed)
 
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def modlogs(
@@ -1591,7 +1601,7 @@ async def modlogs(
 # MODERATION STATS
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 async def ms(
     ctx: commands.Context,
@@ -1695,7 +1705,7 @@ async def ms(
 # FORCE NICKNAME
 # ============================================================
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(manage_nicknames=True)
 @commands.bot_has_permissions(manage_nicknames=True)
@@ -1786,7 +1796,7 @@ async def forcenick(
     )
 
 
-@bot.command()
+@bot.hybrid_command()
 @commands.guild_only()
 @commands.has_permissions(manage_nicknames=True)
 @commands.bot_has_permissions(manage_nicknames=True)
