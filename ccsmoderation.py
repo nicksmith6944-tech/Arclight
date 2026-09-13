@@ -56,6 +56,7 @@ def init_database() -> None:
                 mod_id INTEGER NOT NULL,
                 target_id INTEGER NOT NULL,
                 action_type TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT 'No reason provided',
                 timestamp DATETIME NOT NULL
             );
 
@@ -78,25 +79,37 @@ def init_database() -> None:
             """
         )
 
+        # Add the reason column to databases created by older versions.
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(mod_logs)").fetchall()
+        }
+        if "reason" not in columns:
+            conn.execute(
+                "ALTER TABLE mod_logs ADD COLUMN reason TEXT NOT NULL DEFAULT 'No reason provided'"
+            )
+
 
 def log_moderation_action(
     guild_id: int,
     moderator_id: int,
     target_id: int,
     action_type: str,
+    reason: str = "No reason provided",
 ) -> None:
     with db_connect() as conn:
         conn.execute(
             """
             INSERT INTO mod_logs
-                (guild_id, mod_id, target_id, action_type, timestamp)
-            VALUES (?, ?, ?, ?, ?)
+                (guild_id, mod_id, target_id, action_type, reason, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 guild_id,
                 moderator_id,
                 target_id,
                 action_type.lower(),
+                reason[:1000],
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -498,7 +511,11 @@ async def help_command(ctx: commands.Context):
         (
             "⚠️ Warn",
             f"`{PREFIX}warn <user> (reason)`\n"
-            "Warns a member and increases their warning count.",
+            "Warns a member and increases their warning count.\n"
+            f"`{PREFIX}warns <user>`\n"
+            "Shows a member's warning count and recent warnings.\n"
+            f"`{PREFIX}modlogs <user>`\n"
+            "Shows a member's recent moderation history.",
         ),
         (
             "🔇 Mute",
@@ -674,6 +691,7 @@ async def purge(
         ctx.author.id,
         target.id,
         "purge",
+        f"Messages purged: {deleted_count}",
     )
 
     await log_mod_action_channel(
@@ -714,6 +732,7 @@ async def warn(
         ctx.author.id,
         member.id,
         "warn",
+        reason,
     )
 
     await ctx.send(
@@ -785,6 +804,7 @@ async def mute(
         ctx.author.id,
         member.id,
         "mute",
+        reason,
     )
 
     pretty_duration = format_duration(duration)
@@ -839,6 +859,14 @@ async def unmute(
     except discord.HTTPException as error:
         await send_error(ctx, f"❌ Discord rejected the action: `{error}`")
         return
+
+    log_moderation_action(
+        ctx.guild.id,
+        ctx.author.id,
+        member.id,
+        "unmute",
+        reason,
+    )
 
     await ctx.send(
         f"🔊 {member.mention} has been unmuted.\n"
@@ -944,6 +972,7 @@ async def jail(
         ctx.author.id,
         member.id,
         "jail",
+        reason,
     )
 
     await ctx.send(
@@ -1028,6 +1057,14 @@ async def unjail(
             (ctx.guild.id, member.id),
         )
 
+    log_moderation_action(
+        ctx.guild.id,
+        ctx.author.id,
+        member.id,
+        "unjail",
+        reason,
+    )
+
     await ctx.send(
         f"🔓 {member.mention} has been released from jail.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1078,6 +1115,7 @@ async def ban(
         ctx.author.id,
         member.id,
         "ban",
+        reason,
     )
 
     await ctx.send(
@@ -1125,6 +1163,7 @@ async def kick(
         ctx.author.id,
         member.id,
         "kick",
+        reason,
     )
 
     await ctx.send(
@@ -1174,6 +1213,14 @@ async def unban(
         await send_error(ctx, f"❌ Discord rejected the unban: `{error}`")
         return
 
+    log_moderation_action(
+        ctx.guild.id,
+        ctx.author.id,
+        user.id,
+        "unban",
+        reason,
+    )
+
     await ctx.send(
         f"🔓 **{user}** has been unbanned.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1185,6 +1232,150 @@ async def unban(
         user,
         reason,
     )
+
+
+# ============================================================
+# WARNINGS / MODERATION LOGS
+# ============================================================
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+async def warns(
+    ctx: commands.Context,
+    member: discord.Member,
+):
+    """Show a member's warning count and recent warnings."""
+    with db_connect() as conn:
+        count_row = conn.execute(
+            """
+            SELECT warnings_count
+            FROM users_per_guild
+            WHERE guild_id = ? AND user_id = ?
+            """,
+            (ctx.guild.id, member.id),
+        ).fetchone()
+
+        rows = conn.execute(
+            """
+            SELECT mod_id, reason, timestamp
+            FROM mod_logs
+            WHERE guild_id = ?
+              AND target_id = ?
+              AND action_type = 'warn'
+            ORDER BY id DESC
+            LIMIT 10
+            """,
+            (ctx.guild.id, member.id),
+        ).fetchall()
+
+    total = int(count_row["warnings_count"]) if count_row else 0
+
+    embed = discord.Embed(
+        title=f"⚠️ Warnings — {member}",
+        description=f"**Total Warnings:** `{total}`\nShowing the latest `{len(rows)}` warning(s).",
+        color=discord.Color.orange(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    if rows:
+        lines = []
+        for index, row in enumerate(rows, 1):
+            moderator = ctx.guild.get_member(int(row["mod_id"]))
+            moderator_text = moderator.mention if moderator else f"<@{row['mod_id']}>"
+            try:
+                when = discord.utils.format_dt(
+                    datetime.fromisoformat(row["timestamp"]),
+                    style="R",
+                )
+            except (ValueError, TypeError):
+                when = "Unknown time"
+
+            lines.append(
+                f"**{index}.** {when} • by {moderator_text}\n"
+                f"> {(row['reason'] or 'No reason provided')[:900]}"
+            )
+
+        embed.add_field(
+            name="Recent Warnings",
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Recent Warnings",
+            value="No warnings found for this member.",
+            inline=False,
+        )
+
+    embed.set_footer(text=f"User ID: {member.id} • Guild: {ctx.guild.name}")
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+async def modlogs(
+    ctx: commands.Context,
+    member: discord.Member,
+):
+    """Show a member's recent moderation history."""
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT mod_id, action_type, reason, timestamp
+            FROM mod_logs
+            WHERE guild_id = ? AND target_id = ?
+            ORDER BY id DESC
+            LIMIT 15
+            """,
+            (ctx.guild.id, member.id),
+        ).fetchall()
+
+    embed = discord.Embed(
+        title=f"📋 Mod Logs — {member}",
+        description=f"Showing the latest `{len(rows)}` moderation action(s).",
+        color=discord.Color.blurple(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    if not rows:
+        embed.add_field(
+            name="History",
+            value="No moderation logs found for this member.",
+            inline=False,
+        )
+    else:
+        lines = []
+        for index, row in enumerate(rows, 1):
+            moderator = ctx.guild.get_member(int(row["mod_id"]))
+            moderator_text = moderator.mention if moderator else f"<@{row['mod_id']}>"
+
+            try:
+                when = discord.utils.format_dt(
+                    datetime.fromisoformat(row["timestamp"]),
+                    style="R",
+                )
+            except (ValueError, TypeError):
+                when = "Unknown time"
+
+            action = str(row["action_type"]).replace("_", " ").title()
+            reason = (row["reason"] or "No reason provided")[:700]
+
+            lines.append(
+                f"**{index}.** `{action}` • {when}\n"
+                f"Moderator: {moderator_text}\n"
+                f"Reason: {reason}"
+            )
+
+        embed.add_field(
+            name="Recent Actions",
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(text=f"User ID: {member.id} • Guild: {ctx.guild.name}")
+    await ctx.send(embed=embed)
 
 
 # ============================================================
@@ -1366,6 +1557,7 @@ async def forcenick(
         ctx.author.id,
         member.id,
         "forcenick",
+        "Nickname forcibly locked",
     )
 
     await ctx.send(
@@ -1425,6 +1617,14 @@ async def unforcenick(
             """,
             (ctx.guild.id, member.id),
         )
+
+    log_moderation_action(
+        ctx.guild.id,
+        ctx.author.id,
+        member.id,
+        "unforcenick",
+        "Forced nickname removed",
+    )
 
     await ctx.send(
         f"🏷️ Removed the forced nickname from {member.mention}.\n"
