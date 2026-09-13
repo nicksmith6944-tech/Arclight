@@ -24,8 +24,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
     raise RuntimeError(
-        "DISCORD_TOKEN is missing. Put it in your .env file like:\n"
-        "DISCORD_TOKEN=your_bot_token"
+        "DISCORD_TOKEN environment variable is missing."
     )
 
 
@@ -76,6 +75,11 @@ def init_database() -> None:
                 role_id INTEGER NOT NULL,
                 PRIMARY KEY (guild_id, user_id, role_id)
             );
+
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                modlog_channel_id INTEGER
+            );
             """
         )
 
@@ -88,6 +92,34 @@ def init_database() -> None:
             conn.execute(
                 "ALTER TABLE mod_logs ADD COLUMN reason TEXT NOT NULL DEFAULT 'No reason provided'"
             )
+
+
+def get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    """Return the configured mod-log channel, or the default channel by name."""
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT modlog_channel_id FROM guild_settings WHERE guild_id = ?",
+            (guild.id,),
+        ).fetchone()
+
+    if row and row["modlog_channel_id"]:
+        channel = guild.get_channel(int(row["modlog_channel_id"]))
+        if isinstance(channel, discord.TextChannel):
+            return channel
+
+    return discord.utils.get(guild.text_channels, name=MOD_ACTIONS_CHANNEL)
+
+
+async def set_modlog_channel(guild: discord.Guild, channel_id: Optional[int]) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO guild_settings (guild_id, modlog_channel_id)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET modlog_channel_id = excluded.modlog_channel_id
+            """,
+            (guild.id, channel_id),
+        )
 
 
 def log_moderation_action(
@@ -260,10 +292,7 @@ async def log_mod_action_channel(
     reason: str = "No reason provided",
     extra: Optional[str] = None,
 ) -> None:
-    channel = discord.utils.get(
-        ctx.guild.text_channels,
-        name=MOD_ACTIONS_CHANNEL,
-    )
+    channel = get_modlog_channel(ctx.guild)
 
     if channel is None:
         return
@@ -551,6 +580,12 @@ async def help_command(ctx: commands.Context):
             "👢 Kick",
             f"`{PREFIX}kick <user> (reason)`\n"
             "Kicks a member from the server.",
+        ),
+        (
+            "📋 Mod-Log Channel",
+            f"`{PREFIX}setlogs #channel` — Set the moderation log channel.\n"
+            f"`{PREFIX}setlogs off` — Disable the custom channel.\n"
+            f"`{PREFIX}logs` — Show the current log channel.",
         ),
         (
             "📊 Moderation Stats",
@@ -1232,6 +1267,105 @@ async def unban(
         user,
         reason,
     )
+
+
+# ============================================================
+# MOD-LOG CHANNEL SETTINGS
+# ============================================================
+
+@bot.command(name="setlogs")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
+    """Set, disable, or show the server's moderation log channel."""
+    if not channel_input:
+        current = get_modlog_channel(ctx.guild)
+        if current:
+            await ctx.send(f"📋 Current mod-log channel: {current.mention}")
+        else:
+            await ctx.send(
+                f"📋 No mod-log channel is configured. Use `{PREFIX}setlogs #channel`."
+            )
+        return
+
+    if channel_input.casefold() in {"off", "disable", "none"}:
+        await set_modlog_channel(ctx.guild, None)
+        await ctx.send(
+            f"✅ Custom mod-log channel disabled. I'll use `{MOD_ACTIONS_CHANNEL}` if it exists."
+        )
+        return
+
+    # Resolve a channel mention, channel ID, or exact channel name.
+    channel = None
+    mention_match = re.fullmatch(r"<#(\d+)>", channel_input)
+    if mention_match:
+        channel = ctx.guild.get_channel(int(mention_match.group(1)))
+    elif channel_input.isdigit():
+        channel = ctx.guild.get_channel(int(channel_input))
+    else:
+        channel = discord.utils.get(
+            ctx.guild.text_channels,
+            name=channel_input,
+        )
+
+    if not isinstance(channel, discord.TextChannel):
+        await send_error(
+            ctx,
+            f"❌ I couldn't find that text channel. Use `{PREFIX}setlogs #channel` or a channel ID.",
+        )
+        return
+
+    me = ctx.guild.me
+    if me is None:
+        await send_error(ctx, "❌ I couldn't determine my permissions in this server.")
+        return
+
+    permissions = channel.permissions_for(me)
+    missing = []
+    if not permissions.view_channel:
+        missing.append("View Channel")
+    if not permissions.send_messages:
+        missing.append("Send Messages")
+    if not permissions.embed_links:
+        missing.append("Embed Links")
+
+    if missing:
+        await send_error(
+            ctx,
+            f"❌ I can't use {channel.mention}. Missing: `{', '.join(missing)}`.",
+        )
+        return
+
+    await set_modlog_channel(ctx.guild, channel.id)
+    await ctx.send(f"✅ Moderation logs will now be sent to {channel.mention}.")
+
+
+@bot.command(name="logs")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+async def logs_channel(ctx: commands.Context):
+    """Show the current moderation log channel."""
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT modlog_channel_id FROM guild_settings WHERE guild_id = ?",
+            (ctx.guild.id,),
+        ).fetchone()
+
+    if row and row["modlog_channel_id"]:
+        channel = ctx.guild.get_channel(int(row["modlog_channel_id"]))
+        if channel is not None:
+            await ctx.send(f"📋 Current mod-log channel: {channel.mention}")
+            return
+
+    fallback = discord.utils.get(ctx.guild.text_channels, name=MOD_ACTIONS_CHANNEL)
+    if fallback:
+        await ctx.send(
+            f"📋 No custom channel is set. Using the default {fallback.mention}."
+        )
+    else:
+        await ctx.send(
+            f"📋 No mod-log channel is set, and `{MOD_ACTIONS_CHANNEL}` doesn't exist."
+        )
 
 
 # ============================================================
