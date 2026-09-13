@@ -1882,19 +1882,6 @@ async def ily(ctx: commands.Context):
     await ctx.send("Ily too <3")
 
 
-@bot.command()
-async def drake(ctx: commands.Context):
-    await ctx.send("Out in the six I'm a national treasure")
-
-
-@bot.command(name="kendrick")
-async def kendrick(ctx: commands.Context):
-    await ctx.send("They not like us")
-
-
-@bot.command()
-async def phantom(ctx: commands.Context):
-    await ctx.send("Auntie")
 
 
 @bot.command()
@@ -1915,30 +1902,6 @@ async def potato(ctx: commands.Context):
     await ctx.send("Potatoes")
 
 
-@bot.command()
-async def daksh(ctx: commands.Context):
-    await ctx.send("Daksh is a very good boy")
-
-
-@bot.command()
-async def iamnoob(ctx: commands.Context):
-    await ctx.send("lol")
-
-
-@bot.command(name="Isphantomauntie")
-async def is_phantom_auntie(ctx: commands.Context):
-    await ctx.send("Yes, Phantom is a middle-aged auntie")
-
-
-@bot.command(name="whoismizi")
-async def who_is_mizi(ctx: commands.Context):
-    await ctx.send("GAY")
-
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def potatoes(ctx: commands.Context):
-    await ctx.send("Love")
 
 
 # ============================================================
