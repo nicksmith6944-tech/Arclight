@@ -443,8 +443,6 @@ async def on_ready():
     print(f"✅ {bot.user} is online!")
     print(f"📡 Connected to {len(bot.guilds)} guild(s).")
 
-    # Sync regular hybrid commands as Discord slash commands.
-    # Easter-egg commands intentionally remain prefix-only.
     if not getattr(bot, "_slash_commands_synced", False):
         try:
             synced = await bot.tree.sync()
@@ -556,7 +554,7 @@ async def on_member_update(
 # HELP
 # ============================================================
 
-@bot.hybrid_command(name="help")
+@bot.hybrid_command(name="help", description="Show the moderation bot help menu.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def help_command(ctx: commands.Context):
@@ -663,10 +661,21 @@ async def help_command(ctx: commands.Context):
 
 
 # ============================================================
+# PING
+# ============================================================
+
+@bot.hybrid_command(description="Check the bot's latency (ping).")
+async def ping(ctx: commands.Context):
+    """Check the bot's latency (ping)."""
+    latency_ms = round(bot.latency * 1000)
+    await ctx.send(f"🏓 Pong! Bot ping: `{latency_ms}ms`")
+
+
+# ============================================================
 # CLEAN
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Delete the 10 most recent bot messages in this channel.")
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 @commands.bot_has_permissions(manage_messages=True)
@@ -709,7 +718,7 @@ async def clean(ctx: commands.Context):
 # PURGE
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Delete messages from a specific user in the current channel.")
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 @commands.bot_has_permissions(manage_messages=True)
@@ -791,7 +800,7 @@ async def purge(
 # WARN
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Warn a member and increase their warning count.")
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 async def warn(
@@ -838,7 +847,7 @@ async def warn(
 # MUTE / TIMEOUT
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Timeout a member for a specified duration.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(moderate_members=True)
@@ -912,7 +921,7 @@ async def mute(
 # UNMUTE
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Remove a member's timeout.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(moderate_members=True)
@@ -969,7 +978,7 @@ async def unmute(
 # JAIL / UNJAIL
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Jail a member and save their current roles.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(manage_roles=True)
@@ -1073,7 +1082,7 @@ async def jail(
     )
 
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Release a jailed member and restore their saved roles.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(manage_roles=True)
@@ -1167,7 +1176,7 @@ async def unjail(
 # BAN / UNBAN / KICK
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Permanently ban a member from the server.")
 @commands.guild_only()
 @commands.has_permissions(ban_members=True)
 @commands.bot_has_permissions(ban_members=True)
@@ -1215,7 +1224,7 @@ async def ban(
     )
 
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Kick a member from the server.")
 @commands.guild_only()
 @commands.has_permissions(kick_members=True)
 @commands.bot_has_permissions(kick_members=True)
@@ -1263,7 +1272,7 @@ async def kick(
     )
 
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Unban a user by their Discord user ID.")
 @commands.guild_only()
 @commands.has_permissions(ban_members=True)
 @commands.bot_has_permissions(ban_members=True)
@@ -1322,7 +1331,7 @@ async def unban(
 # PREFIX SETTINGS
 # ============================================================
 
-@bot.hybrid_command(name="setprefix")
+@bot.hybrid_command(name="setprefix", description="Set or reset the server bot prefix.")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
@@ -1358,7 +1367,7 @@ async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
 # MOD-LOG CHANNEL SETTINGS
 # ============================================================
 
-@bot.hybrid_command(name="setlogs")
+@bot.hybrid_command(name="setlogs", description="Set, disable, or show the moderation log channel.")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
@@ -1425,7 +1434,7 @@ async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
     await ctx.send(f"✅ Moderation logs will now be sent to {channel.mention}.")
 
 
-@bot.hybrid_command(name="logs")
+@bot.hybrid_command(name="logs", description="Show the current moderation log channel.")
 @commands.guild_only()
 @commands.has_guild_permissions(manage_guild=True)
 async def logs_channel(ctx: commands.Context):
@@ -1457,7 +1466,7 @@ async def logs_channel(ctx: commands.Context):
 # WARNINGS / MODERATION LOGS
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Show a member's warning count and recent warnings.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def warns(
@@ -1531,7 +1540,7 @@ async def warns(
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Show a member's recent moderation history.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 async def modlogs(
@@ -1601,7 +1610,7 @@ async def modlogs(
 # MODERATION STATS
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Show 7-day, 30-day, and all-time moderation statistics.")
 @commands.guild_only()
 async def ms(
     ctx: commands.Context,
@@ -1705,7 +1714,7 @@ async def ms(
 # FORCE NICKNAME
 # ============================================================
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Set and continuously enforce a member nickname.")
 @commands.guild_only()
 @commands.has_permissions(manage_nicknames=True)
 @commands.bot_has_permissions(manage_nicknames=True)
@@ -1796,7 +1805,7 @@ async def forcenick(
     )
 
 
-@bot.hybrid_command()
+@bot.hybrid_command(description="Remove a member's forced nickname.")
 @commands.guild_only()
 @commands.has_permissions(manage_nicknames=True)
 @commands.bot_has_permissions(manage_nicknames=True)
@@ -1882,6 +1891,19 @@ async def ily(ctx: commands.Context):
     await ctx.send("Ily too <3")
 
 
+@bot.command()
+async def drake(ctx: commands.Context):
+    await ctx.send("Out in the six I'm a national treasure")
+
+
+@bot.command(name="kendrick")
+async def kendrick(ctx: commands.Context):
+    await ctx.send("They not like us")
+
+
+@bot.command()
+async def phantom(ctx: commands.Context):
+    await ctx.send("Auntie")
 
 
 @bot.command()
@@ -1902,6 +1924,30 @@ async def potato(ctx: commands.Context):
     await ctx.send("Potatoes")
 
 
+@bot.command()
+async def daksh(ctx: commands.Context):
+    await ctx.send("Daksh is a very good boy")
+
+
+@bot.command()
+async def iamnoob(ctx: commands.Context):
+    await ctx.send("lol")
+
+
+@bot.command(name="Isphantomauntie")
+async def is_phantom_auntie(ctx: commands.Context):
+    await ctx.send("Yes, Phantom is a middle-aged auntie")
+
+
+@bot.command(name="whoismizi")
+async def who_is_mizi(ctx: commands.Context):
+    await ctx.send("GAY")
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def potatoes(ctx: commands.Context):
+    await ctx.send("Love")
 
 
 # ============================================================
