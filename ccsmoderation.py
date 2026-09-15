@@ -1,4 +1,5 @@
 import os
+import asyncio
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -126,7 +127,12 @@ def set_guild_prefix(guild: discord.Guild, prefix: str) -> None:
 
 
 def get_command_prefix(bot: commands.Bot, message: discord.Message):
-    return get_guild_prefix(message.guild)
+    # Always accept the built-in "," prefix. If a server has a custom
+    # prefix, accept that one too.
+    custom = get_guild_prefix(message.guild)
+    if custom == PREFIX:
+        return PREFIX
+    return [PREFIX, custom]
 
 
 def get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -483,6 +489,8 @@ def cache_message(message: discord.Message) -> None:
 async def on_ready():
     print(f"✅ {bot.user} is online!")
     print(f"📡 Connected to {len(bot.guilds)} guild(s).")
+    print(f"⌨️ Default prefix: {PREFIX!r}")
+    print(f"🧠 Message Content Intent in code: {bot.intents.message_content}")
 
     if not getattr(bot, "_slash_commands_synced", False):
         try:
@@ -498,28 +506,21 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Always cache messages first so snipe has something to work with.
     cache_message(message)
 
     try:
         if message.guild is not None:
-            # Sending a message removes your own AFK status.
             afk_users.pop((message.guild.id, message.author.id), None)
-
             mentioned_afk: list[tuple[int, str]] = []
 
-            # Normal @mentions.
             for member in message.mentions:
                 reason = afk_users.get((message.guild.id, member.id))
                 if reason is not None and member.id != message.author.id:
                     mentioned_afk.append((member.id, reason))
 
-            # Also handle replies to an AFK user's message.
             if message.reference is not None and message.reference.message_id:
                 referenced = message.reference.resolved
 
-                # If Discord did not include the referenced message in the
-                # payload, try the bot's own message cache before giving up.
                 if not isinstance(referenced, discord.Message):
                     for cached in reversed(message_cache.get(message.channel.id, ())):
                         if cached.id == message.reference.message_id:
@@ -542,9 +543,11 @@ async def on_message(message: discord.Message):
                     await message.reply(embed=embed, mention_author=False)
                 except (discord.Forbidden, discord.HTTPException) as error:
                     print(f"⚠️ Could not send AFK reply in {message.channel}: {error}")
+                except Exception as error:
+                    print(f"⚠️ Unexpected AFK handler error: {error!r}")
+    except Exception as error:
+        print(f"⚠️ Unexpected on_message error: {error!r}")
     finally:
-        # Most importantly, an AFK/snipe-side error must NEVER prevent commands
-        # from being processed.
         await bot.process_commands(message)
 
 
@@ -1395,9 +1398,10 @@ async def ban(
         reason,
     )
 
+    dm_status = "sent" if dm_sent else "could not be sent (DMs may be closed)"
     await ctx.send(
         f"🔨 {member.mention} has been banned for **{reason}**.\n"
-        f"📨 DM: {"sent" if dm_sent else "could not be sent (DMs may be closed)"}.\n"
+        f"📨 DM: {dm_status}.\n"
         f"Responsible Moderator: {ctx.author.mention}"
     )
 
@@ -1447,9 +1451,10 @@ async def kick(
         reason,
     )
 
+    dm_status = "sent" if dm_sent else "could not be sent (DMs may be closed)"
     await ctx.send(
         f"👢 {member.mention} has been kicked for **{reason}**.\n"
-        f"📨 DM: {"sent" if dm_sent else "could not be sent (DMs may be closed)"}.\n"
+        f"📨 DM: {dm_status}.\n"
         f"Responsible Moderator: {ctx.author.mention}"
     )
 
@@ -2151,4 +2156,42 @@ async def potatoes(ctx: commands.Context):
 
 init_database()
 
-bot.run(TOKEN)
+
+async def run_bot_with_login_retry() -> None:
+    # Keep the process alive when Discord temporarily returns a global 429
+    # during login instead of letting the deployment restart-loop.
+    retry_delay = 60
+
+    while True:
+        try:
+            print("🚀 Starting ArcLight...")
+            await bot.start(TOKEN, reconnect=True)
+            return
+
+        except discord.LoginFailure:
+            print("❌ Discord rejected the bot token. Check DISCORD_TOKEN.")
+            raise
+
+        except discord.HTTPException as error:
+            if getattr(error, "status", None) != 429:
+                print(f"❌ Discord HTTP error during startup: {error}")
+                raise
+
+            print(
+                f"⏳ Discord rate-limited the login request (429). "
+                f"Waiting {retry_delay}s before trying again..."
+            )
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 900)
+
+        except (discord.GatewayNotFound, discord.ConnectionClosed) as error:
+            print(f"⚠️ Discord connection error during startup: {error}")
+            await asyncio.sleep(min(retry_delay, 300))
+
+
+async def main() -> None:
+    await run_bot_with_login_retry()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
