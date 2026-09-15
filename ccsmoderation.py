@@ -3,6 +3,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from collections import defaultdict, deque
 
 import discord
 from discord.ext import commands
@@ -221,6 +222,14 @@ bot = commands.Bot(
 )
 
 
+# Per-guild AFK status. AFK is intentionally in memory and resets when the bot restarts.
+afk_users: dict[tuple[int, int], str] = {}
+
+# Keep the latest 200 messages for every channel so deleted messages can be sniped.
+message_cache: dict[int, deque] = defaultdict(lambda: deque(maxlen=200))
+deleted_messages: dict[int, deque] = defaultdict(lambda: deque(maxlen=200))
+
+
 # ============================================================
 # GENERAL HELPERS
 # ============================================================
@@ -435,6 +444,33 @@ async def get_or_create_jail_role(
 
 
 # ============================================================
+# AFK / SNIPE / MODERATION DM HELPERS
+# ============================================================
+
+async def send_moderation_dm(
+    target: discord.abc.User,
+    guild: discord.Guild,
+    action: str,
+    reason: str = "No reason provided",
+) -> None:
+    reason = reason.strip() or "No reason provided"
+    try:
+        await target.send(
+            f"👋 {target.mention}, you have been **{action}** in "
+            f"**{guild.name}** for **{reason}**."
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        # The member may have DMs disabled. Never let a failed DM break moderation.
+        pass
+
+
+def cache_message(message: discord.Message) -> None:
+    if message.guild is None:
+        return
+    message_cache[message.channel.id].append(message)
+
+
+# ============================================================
 # EVENTS
 # ============================================================
 
@@ -450,6 +486,103 @@ async def on_ready():
             print(f"🔄 Synced {len(synced)} slash command(s).")
         except discord.HTTPException as error:
             print(f"⚠️ Failed to sync slash commands: {error}")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    cache_message(message)
+
+    # Sending a message removes your own AFK status.
+    if message.guild is not None:
+        afk_users.pop((message.guild.id, message.author.id), None)
+
+        mentioned_afk: list[tuple[int, str]] = []
+        for member in message.mentions:
+            reason = afk_users.get((message.guild.id, member.id))
+            if reason is not None and member.id != message.author.id:
+                mentioned_afk.append((member.id, reason))
+
+        # Also check the author of the message being replied to.
+        if message.reference is not None and message.reference.message_id:
+            referenced = message.reference.resolved
+            if isinstance(referenced, discord.Message):
+                referenced_author = referenced.author
+                reason = afk_users.get((message.guild.id, referenced_author.id))
+                if reason is not None and referenced_author.id != message.author.id:
+                    if all(uid != referenced_author.id for uid, _ in mentioned_afk):
+                        mentioned_afk.append((referenced_author.id, reason))
+
+        for user_id, reason in mentioned_afk:
+            member = message.guild.get_member(user_id)
+            if member is None:
+                continue
+            embed = discord.Embed(
+                description=f"<@{user_id}> is afk: **{reason}**",
+                color=discord.Color.blurple(),
+            )
+            await message.reply(embed=embed, mention_author=False)
+
+    await bot.process_commands(message)
+
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+
+    cached = message_cache.get(payload.channel_id)
+    if not cached:
+        return
+
+    for message in reversed(cached):
+        if message.id == payload.message_id:
+            deleted_messages[payload.channel_id].appendleft(message)
+            break
+
+
+@bot.hybrid_command(description="Set your AFK status with an optional reason.")
+@commands.guild_only()
+async def afk(ctx: commands.Context, *, reason: str = "afk"):
+    reason = reason.strip() or "afk"
+    afk_users[(ctx.guild.id, ctx.author.id)] = reason
+    await ctx.send(f"💤 {ctx.author.mention} is now AFK: **{reason}**")
+
+
+@bot.hybrid_command(description="Show a recently deleted message from this channel.")
+@commands.guild_only()
+async def snipe(ctx: commands.Context, number: int = 1):
+    if number < 1:
+        await send_error(ctx, "❌ The snipe number must be 1 or higher.")
+        return
+
+    history = deleted_messages.get(ctx.channel.id)
+    if not history or number > len(history):
+        await send_error(ctx, f"❌ There aren't that many deleted messages saved. Available: `{len(history) if history else 0}`.")
+        return
+
+    message = history[number - 1]
+    embed = discord.Embed(
+        description=message.content or "*No text content*",
+        color=discord.Color.blurple(),
+        timestamp=message.created_at,
+    )
+    embed.set_author(
+        name=message.author.display_name,
+        icon_url=message.author.display_avatar.url,
+    )
+    embed.set_footer(text=f"Snipe #{number} • Message ID: {message.id}")
+
+    if message.attachments:
+        embed.add_field(
+            name="Attachments",
+            value="\n".join(a.url for a in message.attachments)[:1024],
+            inline=False,
+        )
+
+    await ctx.send(embed=embed)
 
 
 @bot.event
@@ -700,10 +833,11 @@ async def clean(ctx: commands.Context):
                 except discord.HTTPException:
                     pass
 
-    try:
-        await ctx.message.delete()
-    except discord.HTTPException:
-        pass
+    if ctx.message is not None:
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
     await log_mod_action_channel(
         ctx,
@@ -768,10 +902,11 @@ async def purge(
         except discord.HTTPException:
             pass
 
-    try:
-        await ctx.message.delete()
-    except discord.HTTPException:
-        pass
+    if ctx.message is not None:
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
     await ctx.send(
         f"🧹 Deleted `{deleted_count}` message(s) from {target.mention}.\n"
@@ -827,6 +962,8 @@ async def warn(
         "warn",
         reason,
     )
+
+    await send_moderation_dm(member, ctx.guild, "warned", reason)
 
     await ctx.send(
         f"⚠️ {member.mention} has been warned for **{reason}**.\n"
@@ -902,6 +1039,8 @@ async def mute(
 
     pretty_duration = format_duration(duration)
 
+    await send_moderation_dm(member, ctx.guild, "muted", reason)
+
     await ctx.send(
         f"🔇 {member.mention} has been muted for `{pretty_duration}`.\n"
         f"Reason: {reason}\n"
@@ -960,6 +1099,8 @@ async def unmute(
         "unmute",
         reason,
     )
+
+    await send_moderation_dm(member, ctx.guild, "unmuted", reason)
 
     await ctx.send(
         f"🔊 {member.mention} has been unmuted.\n"
@@ -1068,6 +1209,8 @@ async def jail(
         reason,
     )
 
+    await send_moderation_dm(member, ctx.guild, "jailed", reason)
+
     await ctx.send(
         f"🔒 {member.mention} has been jailed for **{reason}**.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1158,6 +1301,8 @@ async def unjail(
         reason,
     )
 
+    await send_moderation_dm(member, ctx.guild, "unjailed", reason)
+
     await ctx.send(
         f"🔓 {member.mention} has been released from jail.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1211,6 +1356,8 @@ async def ban(
         reason,
     )
 
+    await send_moderation_dm(member, ctx.guild, "banned", reason)
+
     await ctx.send(
         f"🔨 {member.mention} has been banned for **{reason}**.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1258,6 +1405,8 @@ async def kick(
         "kick",
         reason,
     )
+
+    await send_moderation_dm(member, ctx.guild, "kicked", reason)
 
     await ctx.send(
         f"👢 {member.mention} has been kicked for **{reason}**.\n"
@@ -1313,6 +1462,8 @@ async def unban(
         "unban",
         reason,
     )
+
+    await send_moderation_dm(user, ctx.guild, "unbanned", reason)
 
     await ctx.send(
         f"🔓 **{user}** has been unbanned.\n"
@@ -1788,6 +1939,8 @@ async def forcenick(
         "Nickname forcibly locked",
     )
 
+    await send_moderation_dm(member, ctx.guild, "given a forced nickname", "Nickname forcibly locked")
+
     await ctx.send(
         f"🏷️ {member.mention}'s nickname is now forced to `{nickname}`.\n"
         f"Responsible Moderator: {ctx.author.mention}"
@@ -1853,6 +2006,8 @@ async def unforcenick(
         "unforcenick",
         "Forced nickname removed",
     )
+
+    await send_moderation_dm(member, ctx.guild, "removed from forced nickname enforcement", "Forced nickname removed")
 
     await ctx.send(
         f"🏷️ Removed the forced nickname from {member.mention}.\n"
