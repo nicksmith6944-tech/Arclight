@@ -452,16 +452,21 @@ async def send_moderation_dm(
     guild: discord.Guild,
     action: str,
     reason: str = "No reason provided",
-) -> None:
+) -> bool:
+    """Try to DM the target and return True if Discord accepted the message."""
     reason = reason.strip() or "No reason provided"
     try:
         await target.send(
             f"👋 {target.mention}, you have been **{action}** in "
             f"**{guild.name}** for **{reason}**."
         )
-    except (discord.Forbidden, discord.HTTPException):
-        # The member may have DMs disabled. Never let a failed DM break moderation.
-        pass
+        return True
+    except discord.Forbidden:
+        print(f"⚠️ Could not DM {target} ({target.id}): DMs are closed or the bot is blocked.")
+        return False
+    except discord.HTTPException as error:
+        print(f"⚠️ Could not DM {target} ({target.id}): {error}")
+        return False
 
 
 def cache_message(message: discord.Message) -> None:
@@ -493,39 +498,54 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # Always cache messages first so snipe has something to work with.
     cache_message(message)
 
-    # Sending a message removes your own AFK status.
-    if message.guild is not None:
-        afk_users.pop((message.guild.id, message.author.id), None)
+    try:
+        if message.guild is not None:
+            # Sending a message removes your own AFK status.
+            afk_users.pop((message.guild.id, message.author.id), None)
 
-        mentioned_afk: list[tuple[int, str]] = []
-        for member in message.mentions:
-            reason = afk_users.get((message.guild.id, member.id))
-            if reason is not None and member.id != message.author.id:
-                mentioned_afk.append((member.id, reason))
+            mentioned_afk: list[tuple[int, str]] = []
 
-        # Also check the author of the message being replied to.
-        if message.reference is not None and message.reference.message_id:
-            referenced = message.reference.resolved
-            if isinstance(referenced, discord.Message):
-                referenced_author = referenced.author
-                reason = afk_users.get((message.guild.id, referenced_author.id))
-                if reason is not None and referenced_author.id != message.author.id:
-                    if all(uid != referenced_author.id for uid, _ in mentioned_afk):
-                        mentioned_afk.append((referenced_author.id, reason))
+            # Normal @mentions.
+            for member in message.mentions:
+                reason = afk_users.get((message.guild.id, member.id))
+                if reason is not None and member.id != message.author.id:
+                    mentioned_afk.append((member.id, reason))
 
-        for user_id, reason in mentioned_afk:
-            member = message.guild.get_member(user_id)
-            if member is None:
-                continue
-            embed = discord.Embed(
-                description=f"<@{user_id}> is afk: **{reason}**",
-                color=discord.Color.blurple(),
-            )
-            await message.reply(embed=embed, mention_author=False)
+            # Also handle replies to an AFK user's message.
+            if message.reference is not None and message.reference.message_id:
+                referenced = message.reference.resolved
 
-    await bot.process_commands(message)
+                # If Discord did not include the referenced message in the
+                # payload, try the bot's own message cache before giving up.
+                if not isinstance(referenced, discord.Message):
+                    for cached in reversed(message_cache.get(message.channel.id, ())):
+                        if cached.id == message.reference.message_id:
+                            referenced = cached
+                            break
+
+                if isinstance(referenced, discord.Message):
+                    referenced_author = referenced.author
+                    reason = afk_users.get((message.guild.id, referenced_author.id))
+                    if reason is not None and referenced_author.id != message.author.id:
+                        if all(uid != referenced_author.id for uid, _ in mentioned_afk):
+                            mentioned_afk.append((referenced_author.id, reason))
+
+            for user_id, reason in mentioned_afk:
+                try:
+                    embed = discord.Embed(
+                        description=f"<@{user_id}> is AFK: **{reason}**",
+                        color=discord.Color.blurple(),
+                    )
+                    await message.reply(embed=embed, mention_author=False)
+                except (discord.Forbidden, discord.HTTPException) as error:
+                    print(f"⚠️ Could not send AFK reply in {message.channel}: {error}")
+    finally:
+        # Most importantly, an AFK/snipe-side error must NEVER prevent commands
+        # from being processed.
+        await bot.process_commands(message)
 
 
 @bot.event
@@ -541,6 +561,22 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
         if message.id == payload.message_id:
             deleted_messages[payload.channel_id].appendleft(message)
             break
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    """Save messages removed by Discord's bulk-delete endpoint for snipe."""
+    if payload.guild_id is None:
+        return
+
+    cached = message_cache.get(payload.channel_id)
+    if not cached:
+        return
+
+    deleted_ids = set(payload.message_ids)
+    for message in reversed(cached):
+        if message.id in deleted_ids:
+            deleted_messages[payload.channel_id].appendleft(message)
 
 
 @bot.hybrid_command(description="Set your AFK status with an optional reason.")
@@ -1337,6 +1373,9 @@ async def ban(
         await send_error(ctx, message)
         return
 
+    # DM before the ban because the member leaves the guild immediately after it.
+    dm_sent = await send_moderation_dm(member, ctx.guild, "banned", reason)
+
     try:
         await member.ban(
             reason=f"{reason} | Moderator: {ctx.author}",
@@ -1356,10 +1395,9 @@ async def ban(
         reason,
     )
 
-    await send_moderation_dm(member, ctx.guild, "banned", reason)
-
     await ctx.send(
         f"🔨 {member.mention} has been banned for **{reason}**.\n"
+        f"📨 DM: {"sent" if dm_sent else "could not be sent (DMs may be closed)"}.\n"
         f"Responsible Moderator: {ctx.author.mention}"
     )
 
@@ -1387,6 +1425,9 @@ async def kick(
         await send_error(ctx, message)
         return
 
+    # DM before the kick because the member leaves the guild immediately after it.
+    dm_sent = await send_moderation_dm(member, ctx.guild, "kicked", reason)
+
     try:
         await member.kick(
             reason=f"{reason} | Moderator: {ctx.author}",
@@ -1406,10 +1447,9 @@ async def kick(
         reason,
     )
 
-    await send_moderation_dm(member, ctx.guild, "kicked", reason)
-
     await ctx.send(
         f"👢 {member.mention} has been kicked for **{reason}**.\n"
+        f"📨 DM: {"sent" if dm_sent else "could not be sent (DMs may be closed)"}.\n"
         f"Responsible Moderator: {ctx.author.mention}"
     )
 
