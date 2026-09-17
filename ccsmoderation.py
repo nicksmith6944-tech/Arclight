@@ -2241,6 +2241,13 @@ async def who_is_mizi(ctx: commands.Context):
         "GAY",
     )
 
+@bot.command(name="whoispeak")
+async def who_is_peak(ctx: commands.Context):
+    await send_embed(
+        ctx,
+        "Light",
+    )
+
 
 @bot.command()
 @commands.has_permissions(administrator=True)
