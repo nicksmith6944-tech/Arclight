@@ -2245,7 +2245,7 @@ async def who_is_mizi(ctx: commands.Context):
 async def who_is_peak(ctx: commands.Context):
     await send_embed(
         ctx,
-        "Light",
+        "Phantom cutie patootie auntie",
     )
 
 
