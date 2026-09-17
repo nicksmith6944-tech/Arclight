@@ -330,8 +330,22 @@ def can_moderate(
     return True, ""
 
 
+async def send_embed(
+    ctx: commands.Context,
+    message: str,
+    *,
+    title: Optional[str] = None,
+    color: discord.Color = discord.Color.blurple(),
+    delete_after: Optional[float] = None,
+) -> None:
+    embed = discord.Embed(title=title, description=message, color=color)
+    await ctx.send(embed=embed, delete_after=delete_after)
+
+
 async def send_error(ctx: commands.Context, message: str) -> None:
-    await ctx.send(message, delete_after=7)
+    await send_embed(
+        ctx, message, title="❌ Error", color=discord.Color.red(), delete_after=7
+    )
 
 
 async def log_mod_action_channel(
@@ -462,10 +476,15 @@ async def send_moderation_dm(
     """Try to DM the target and return True if Discord accepted the message."""
     reason = reason.strip() or "No reason provided"
     try:
-        await target.send(
-            f"👋 {target.mention}, you have been **{action}** in "
-            f"**{guild.name}** for **{reason}**."
+        embed = discord.Embed(
+            title=f"🛡️ Moderation Action: {action.title()}",
+            description=(
+                f"👋 {target.mention}, you have been **{action}** in "
+                f"**{guild.name}** for **{reason}**."
+            ),
+            color=discord.Color.blurple(),
         )
+        await target.send(embed=embed)
         return True
     except discord.Forbidden:
         print(f"⚠️ Could not DM {target} ({target.id}): DMs are closed or the bot is blocked.")
@@ -510,7 +529,25 @@ async def on_message(message: discord.Message):
 
     try:
         if message.guild is not None:
-            afk_users.pop((message.guild.id, message.author.id), None)
+            removed_afk_reason = afk_users.pop(
+                (message.guild.id, message.author.id), None
+            )
+            if removed_afk_reason is not None:
+                try:
+                    embed = discord.Embed(
+                        title="👋 Welcome Back!",
+                        description=(
+                            f"{message.author.mention}, your AFK status has been removed."
+                        ),
+                        color=discord.Color.green(),
+                    )
+                    await message.channel.send(embed=embed)
+                except (discord.Forbidden, discord.HTTPException) as error:
+                    print(
+                        f"⚠️ Could not send AFK removal message in "
+                        f"{message.channel}: {error}"
+                    )
+
             mentioned_afk: list[tuple[int, str]] = []
 
             for member in message.mentions:
@@ -587,7 +624,7 @@ async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent)
 async def afk(ctx: commands.Context, *, reason: str = "afk"):
     reason = reason.strip() or "afk"
     afk_users[(ctx.guild.id, ctx.author.id)] = reason
-    await ctx.send(f"💤 {ctx.author.mention} is now AFK: **{reason}**")
+    await send_embed(ctx, f"{ctx.author.mention} is now AFK: **{reason}**", title="💤 AFK Enabled")
 
 
 @bot.hybrid_command(description="Show a recently deleted message from this channel.")
@@ -840,7 +877,7 @@ async def help_command(ctx: commands.Context):
 async def ping(ctx: commands.Context):
     """Check the bot's latency (ping)."""
     latency_ms = round(bot.latency * 1000)
-    await ctx.send(f"🏓 Pong! Bot ping: `{latency_ms}ms`")
+    await send_embed(ctx, f"🏓 Pong! Bot ping: `{latency_ms}ms`", title="🏓 Pong!")
 
 
 # ============================================================
@@ -947,7 +984,8 @@ async def purge(
         except discord.HTTPException:
             pass
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🧹 Deleted `{deleted_count}` message(s) from {target.mention}.\n"
         f"Responsible Moderator: {ctx.author.mention}",
         delete_after=7,
@@ -1004,10 +1042,11 @@ async def warn(
 
     await send_moderation_dm(member, ctx.guild, "warned", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"⚠️ {member.mention} has been warned for **{reason}**.\n"
         f"Responsible Moderator: {ctx.author.mention}\n"
-        f"Total Warnings: `{total_warnings}`"
+        f"Total Warnings: `{total_warnings}`",
     )
 
     await log_mod_action_channel(
@@ -1080,10 +1119,11 @@ async def mute(
 
     await send_moderation_dm(member, ctx.guild, "muted", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔇 {member.mention} has been muted for `{pretty_duration}`.\n"
         f"Reason: {reason}\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1141,9 +1181,10 @@ async def unmute(
 
     await send_moderation_dm(member, ctx.guild, "unmuted", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔊 {member.mention} has been unmuted.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1250,9 +1291,10 @@ async def jail(
 
     await send_moderation_dm(member, ctx.guild, "jailed", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔒 {member.mention} has been jailed for **{reason}**.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1342,9 +1384,10 @@ async def unjail(
 
     await send_moderation_dm(member, ctx.guild, "unjailed", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔓 {member.mention} has been released from jail.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1399,10 +1442,11 @@ async def ban(
     )
 
     dm_status = "sent" if dm_sent else "could not be sent (DMs may be closed)"
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔨 {member.mention} has been banned for **{reason}**.\n"
         f"📨 DM: {dm_status}.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1452,10 +1496,11 @@ async def kick(
     )
 
     dm_status = "sent" if dm_sent else "could not be sent (DMs may be closed)"
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"👢 {member.mention} has been kicked for **{reason}**.\n"
         f"📨 DM: {dm_status}.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1510,9 +1555,10 @@ async def unban(
 
     await send_moderation_dm(user, ctx.guild, "unbanned", reason)
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🔓 **{user}** has been unbanned.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -1535,10 +1581,11 @@ async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
     current = get_guild_prefix(ctx.guild)
 
     if new_prefix is None:
-        await ctx.send(
+        await send_embed(
+            ctx,
             f"⚙️ Current prefix: `{current}`\n"
             f"Use `{current}setprefix <new_prefix>` to change it.\n"
-            f"Use `{current}setprefix default` to reset it to `,`."
+            f"Use `{current}setprefix default` to reset it to `,`.",
         )
         return
 
@@ -1556,7 +1603,10 @@ async def setprefix(ctx: commands.Context, *, new_prefix: Optional[str] = None):
         return
 
     set_guild_prefix(ctx.guild, new_prefix)
-    await ctx.send(f"✅ Prefix changed from `{current}` to `{new_prefix}`.")
+    await send_embed(
+        ctx,
+        f"✅ Prefix changed from `{current}` to `{new_prefix}`.",
+    )
 
 
 # ============================================================
@@ -1571,17 +1621,22 @@ async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
     if not channel_input:
         current = get_modlog_channel(ctx.guild)
         if current:
-            await ctx.send(f"📋 Current mod-log channel: {current.mention}")
+            await send_embed(
+                ctx,
+                f"📋 Current mod-log channel: {current.mention}",
+            )
         else:
-            await ctx.send(
-                f"📋 No mod-log channel is configured. Use `{PREFIX}setlogs #channel`."
+            await send_embed(
+                ctx,
+                f"📋 No mod-log channel is configured. Use `{PREFIX}setlogs #channel`.",
             )
         return
 
     if channel_input.casefold() in {"off", "disable", "none"}:
         await set_modlog_channel(ctx.guild, None)
-        await ctx.send(
-            f"✅ Custom mod-log channel disabled. I'll use `{MOD_ACTIONS_CHANNEL}` if it exists."
+        await send_embed(
+            ctx,
+            f"✅ Custom mod-log channel disabled. I'll use `{MOD_ACTIONS_CHANNEL}` if it exists.",
         )
         return
 
@@ -1627,7 +1682,10 @@ async def setlogs(ctx: commands.Context, channel_input: Optional[str] = None):
         return
 
     await set_modlog_channel(ctx.guild, channel.id)
-    await ctx.send(f"✅ Moderation logs will now be sent to {channel.mention}.")
+    await send_embed(
+        ctx,
+        f"✅ Moderation logs will now be sent to {channel.mention}.",
+    )
 
 
 @bot.hybrid_command(name="logs", description="Show the current moderation log channel.")
@@ -1644,17 +1702,22 @@ async def logs_channel(ctx: commands.Context):
     if row and row["modlog_channel_id"]:
         channel = ctx.guild.get_channel(int(row["modlog_channel_id"]))
         if channel is not None:
-            await ctx.send(f"📋 Current mod-log channel: {channel.mention}")
+            await send_embed(
+                ctx,
+                f"📋 Current mod-log channel: {channel.mention}",
+            )
             return
 
     fallback = discord.utils.get(ctx.guild.text_channels, name=MOD_ACTIONS_CHANNEL)
     if fallback:
-        await ctx.send(
-            f"📋 No custom channel is set. Using the default {fallback.mention}."
+        await send_embed(
+            ctx,
+            f"📋 No custom channel is set. Using the default {fallback.mention}.",
         )
     else:
-        await ctx.send(
-            f"📋 No mod-log channel is set, and `{MOD_ACTIONS_CHANNEL}` doesn't exist."
+        await send_embed(
+            ctx,
+            f"📋 No mod-log channel is set, and `{MOD_ACTIONS_CHANNEL}` doesn't exist.",
         )
 
 
@@ -1986,9 +2049,10 @@ async def forcenick(
 
     await send_moderation_dm(member, ctx.guild, "given a forced nickname", "Nickname forcibly locked")
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🏷️ {member.mention}'s nickname is now forced to `{nickname}`.\n"
-        f"Responsible Moderator: {ctx.author.mention}"
+        f"Responsible Moderator: {ctx.author.mention}",
     )
 
     await log_mod_action_channel(
@@ -2054,9 +2118,10 @@ async def unforcenick(
 
     await send_moderation_dm(member, ctx.guild, "removed from forced nickname enforcement", "Forced nickname removed")
 
-    await ctx.send(
+    await send_embed(
+        ctx,
         f"🏷️ Removed the forced nickname from {member.mention}.\n"
-        "They can now change their nickname normally."
+        "They can now change their nickname normally.",
     )
 
     await log_mod_action_channel(
@@ -2074,80 +2139,116 @@ async def unforcenick(
 
 @bot.command()
 async def light(ctx: commands.Context):
-    await ctx.send(
-        "Light is the most good-looking person that has ever existed ✨"
+    await send_embed(
+        ctx,
+        "Light is the most good-looking person that has ever existed ✨",
     )
 
 
 @bot.command()
 async def winter(ctx: commands.Context):
-    await ctx.send(
-        "Winter, mostly known as Wintersoul, is Light's kitten"
+    await send_embed(
+        ctx,
+        "Winter, mostly known as Wintersoul, is Light's kitten",
     )
 
 
 @bot.command()
 async def ily(ctx: commands.Context):
-    await ctx.send("Ily too <3")
+    await send_embed(
+        ctx,
+        "Ily too <3",
+    )
 
 
 @bot.command()
 async def drake(ctx: commands.Context):
-    await ctx.send("Out in the six I'm a national treasure")
+    await send_embed(
+        ctx,
+        "Out in the six I'm a national treasure",
+    )
 
 
 @bot.command(name="kendrick")
 async def kendrick(ctx: commands.Context):
-    await ctx.send("They not like us")
+    await send_embed(
+        ctx,
+        "They not like us",
+    )
 
 
 @bot.command()
 async def phantom(ctx: commands.Context):
-    await ctx.send("Auntie")
+    await send_embed(
+        ctx,
+        "Auntie",
+    )
 
 
 @bot.command()
 async def diddle(ctx: commands.Context):
-    await ctx.send("Winter")
+    await send_embed(
+        ctx,
+        "Winter",
+    )
 
 
 @bot.command(name="help_me")
 async def help_me(ctx: commands.Context):
-    await ctx.send(
+    await send_embed(
+        ctx,
         "You need to ask Light for help, he is the most good-looking "
-        "person that has ever existed ✨"
+        "person that has ever existed ✨",
     )
 
 
 @bot.command()
 async def potato(ctx: commands.Context):
-    await ctx.send("Potatoes")
+    await send_embed(
+        ctx,
+        "Potatoes",
+    )
 
 
 @bot.command()
 async def daksh(ctx: commands.Context):
-    await ctx.send("Daksh is a very good boy")
+    await send_embed(
+        ctx,
+        "Daksh is a very good boy",
+    )
 
 
 @bot.command()
 async def iamnoob(ctx: commands.Context):
-    await ctx.send("lol")
+    await send_embed(
+        ctx,
+        "lol",
+    )
 
 
 @bot.command(name="Isphantomauntie")
 async def is_phantom_auntie(ctx: commands.Context):
-    await ctx.send("Yes, Phantom is a middle-aged auntie")
+    await send_embed(
+        ctx,
+        "Yes, Phantom is a middle-aged auntie",
+    )
 
 
 @bot.command(name="whoismizi")
 async def who_is_mizi(ctx: commands.Context):
-    await ctx.send("GAY")
+    await send_embed(
+        ctx,
+        "GAY",
+    )
 
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def potatoes(ctx: commands.Context):
-    await ctx.send("Love")
+    await send_embed(
+        ctx,
+        "Love",
+    )
 
 
 # ============================================================
