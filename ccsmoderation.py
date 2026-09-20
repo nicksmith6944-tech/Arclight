@@ -511,6 +511,15 @@ async def on_ready():
     print(f"⌨️ Default prefix: {PREFIX!r}")
     print(f"🧠 Message Content Intent in code: {bot.intents.message_content}")
 
+    # Start the Railway console sender only after Discord is connected.
+    # This guarantees the worker has a live bot connection before it tries
+    # to send queued messages. The guard prevents duplicate workers on
+    # Discord reconnects.
+    if not getattr(bot, "_console_sender_started", False):
+        bot._console_sender_started = True
+        bot._console_sender_task = asyncio.create_task(console_sender_worker())
+        print("🖥️ Railway console sender started!")
+
     if not getattr(bot, "_slash_commands_synced", False):
         try:
             synced = await bot.tree.sync()
@@ -2317,8 +2326,8 @@ def configure_bash_history_expansion() -> None:
 
 async def console_sender_worker() -> None:
     """Read queued Railway console messages and send them through ArcLight."""
-    print("🖥️ Railway console sender ready.")
-    print("💬 Use: !send <channel_id> <message>")
+    print("🖥️ Railway console sender ready.", flush=True)
+    print("💬 Use: !send <channel_id> <message>", flush=True)
 
     while True:
         try:
@@ -2339,7 +2348,7 @@ async def console_sender_worker() -> None:
                 pass
 
             for line in lines:
-                line = line.rstrip("\\n")
+                line = line.rstrip("\n")
                 if not line or "\\t" not in line:
                     print("⚠️ Ignored malformed console message.")
                     continue
@@ -2424,8 +2433,8 @@ async def run_bot_with_login_retry() -> None:
 
 
 async def main() -> None:
-    # Run the Railway console sender alongside the Discord bot.
-    asyncio.create_task(console_sender_worker())
+    # The console sender is started from on_ready(), after Discord is
+    # connected, so it always has a live bot connection available.
     await run_bot_with_login_retry()
 
 
