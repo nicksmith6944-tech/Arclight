@@ -2349,11 +2349,11 @@ async def console_sender_worker() -> None:
 
             for line in lines:
                 line = line.rstrip("\n")
-                if not line or "\\t" not in line:
+                if not line or "\t" not in line:
                     print("⚠️ Ignored malformed console message.")
                     continue
 
-                channel_text, content = line.split("\\t", 1)
+                channel_text, content = line.split("\t", 1)
 
                 try:
                     channel_id = int(channel_text)
@@ -2440,3 +2440,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
