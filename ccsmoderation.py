@@ -2241,13 +2241,6 @@ async def who_is_mizi(ctx: commands.Context):
         "GAY",
     )
 
-@bot.command(name="whoispeak")
-async def who_is_peak(ctx: commands.Context):
-    await send_embed(
-        ctx,
-        "Phantom cutie patootie auntie",
-    )
-
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -2259,10 +2252,143 @@ async def potatoes(ctx: commands.Context):
 
 
 # ============================================================
+# RAILWAY CONSOLE SENDER
+# ============================================================
+
+# Messages written by the Railway console helper are queued here.
+CONSOLE_QUEUE_PATH = os.path.join(BASE_DIR, ".arclight_console_queue")
+CONSOLE_HELPER_PATH = "/usr/local/bin/!send"
+
+
+def install_console_send_helper() -> None:
+    """
+    Install a tiny shell helper so the Railway container console can use:
+
+        !send <channel_id> <message>
+
+    The helper only writes to ArcLight's local queue; the running bot process
+    is responsible for actually sending the Discord message.
+    """
+    helper = f"""#!/bin/sh
+QUEUE={CONSOLE_QUEUE_PATH!r}
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: !send <channel_id> <message>"
+    exit 1
+fi
+
+case "$1" in
+    *[!0-9]*|'')
+        echo "❌ Invalid channel ID."
+        exit 1
+        ;;
+esac
+
+channel_id="$1"
+shift
+message="$*"
+
+printf '%s\\t%s\\n' "$channel_id" "$message" >> "$QUEUE"
+echo "📨 Queued message for channel $channel_id"
+"""
+    try:
+        with open(CONSOLE_HELPER_PATH, "w", encoding="utf-8") as file:
+            file.write(helper)
+        os.chmod(CONSOLE_HELPER_PATH, 0o755)
+    except (PermissionError, OSError) as error:
+        print(f"⚠️ Could not install Railway !send helper: {error}")
+
+
+def configure_bash_history_expansion() -> None:
+    """
+    Bash normally treats !send as history expansion. Disable that for
+    interactive Railway shells so the literal !send command can be used.
+    """
+    bashrc_path = os.path.expanduser("~/.bashrc")
+    try:
+        with open(bashrc_path, "a", encoding="utf-8") as file:
+            file.write(
+                "\n# ArcLight Railway console sender\n"
+                "set +H 2>/dev/null\n"
+            )
+    except (PermissionError, OSError) as error:
+        print(f"⚠️ Could not configure bash history expansion: {error}")
+
+
+async def console_sender_worker() -> None:
+    """Read queued Railway console messages and send them through ArcLight."""
+    print("🖥️ Railway console sender ready.")
+    print("💬 Use: !send <channel_id> <message>")
+
+    while True:
+        try:
+            if not os.path.exists(CONSOLE_QUEUE_PATH):
+                await asyncio.sleep(0.5)
+                continue
+
+            with open(CONSOLE_QUEUE_PATH, "r", encoding="utf-8") as file:
+                lines = file.readlines()
+
+            if not lines:
+                await asyncio.sleep(0.5)
+                continue
+
+            # Clear the queue before sending so new messages can be queued
+            # while Discord requests are in progress.
+            with open(CONSOLE_QUEUE_PATH, "w", encoding="utf-8"):
+                pass
+
+            for line in lines:
+                line = line.rstrip("\\n")
+                if not line or "\\t" not in line:
+                    print("⚠️ Ignored malformed console message.")
+                    continue
+
+                channel_text, content = line.split("\\t", 1)
+
+                try:
+                    channel_id = int(channel_text)
+                except ValueError:
+                    print(f"⚠️ Invalid console channel ID: {channel_text!r}")
+                    continue
+
+                channel = bot.get_channel(channel_id)
+
+                # If the channel is not cached, fetch it directly. This also
+                # lets the feature work across all servers ArcLight is in.
+                if channel is None:
+                    try:
+                        channel = await bot.fetch_channel(channel_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+                        print(f"❌ Could not access channel {channel_id}: {error}")
+                        continue
+
+                if not hasattr(channel, "send"):
+                    print(f"❌ Channel {channel_id} cannot receive messages.")
+                    continue
+
+                try:
+                    await channel.send(content)
+                    print(f"✅ Sent console message to #{getattr(channel, 'name', channel_id)} ({channel_id})")
+                except discord.Forbidden:
+                    print(f"❌ Missing permission to send messages in channel {channel_id}.")
+                except discord.HTTPException as error:
+                    print(f"❌ Discord rejected the message for channel {channel_id}: {error}")
+
+        except Exception as error:
+            print(f"⚠️ Console sender error: {error!r}")
+
+        await asyncio.sleep(0.5)
+
+
+# ============================================================
 # STARTUP
 # ============================================================
 
 init_database()
+
+install_console_send_helper()
+configure_bash_history_expansion()
 
 
 async def run_bot_with_login_retry() -> None:
@@ -2298,6 +2424,8 @@ async def run_bot_with_login_retry() -> None:
 
 
 async def main() -> None:
+    # Run the Railway console sender alongside the Discord bot.
+    asyncio.create_task(console_sender_worker())
     await run_bot_with_login_retry()
 
 
