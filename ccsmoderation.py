@@ -686,8 +686,28 @@ async def announce(
         await send_error(ctx, "❌ The announcement text cannot be empty.")
         return
 
+    embed = discord.Embed(
+        title="📢 Announcement",
+        description=text,
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    if ctx.guild.icon:
+        embed.set_author(
+            name=ctx.guild.name,
+            icon_url=ctx.guild.icon.url,
+        )
+    else:
+        embed.set_author(name=ctx.guild.name)
+
+    embed.set_footer(
+        text=f"Announced by {ctx.author.display_name}",
+        icon_url=ctx.author.display_avatar.url,
+    )
+
     try:
-        await channel.send(text)
+        await channel.send(embed=embed)
     except discord.Forbidden:
         await send_error(ctx, f"❌ I can't send messages in {channel.mention}.")
         return
