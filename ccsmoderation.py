@@ -669,6 +669,61 @@ async def snipe(ctx: commands.Context, number: int = 1):
 
     await ctx.send(embed=embed)
 
+@bot.hybrid_command(name="announce", description="Send an announcement to a selected text channel.")
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+@commands.bot_has_permissions(send_messages=True)
+async def announce(
+    ctx: commands.Context,
+    channel: discord.TextChannel,
+    *,
+    text: str,
+):
+    """Send an announcement to the selected text channel."""
+    text = text.strip()
+
+    if not text:
+        await send_error(ctx, "❌ The announcement text cannot be empty.")
+        return
+
+    try:
+        await channel.send(text)
+    except discord.Forbidden:
+        await send_error(ctx, f"❌ I can't send messages in {channel.mention}.")
+        return
+    except discord.HTTPException as error:
+        await send_error(ctx, f"❌ Discord rejected the announcement: `{error}`")
+        return
+
+    await send_embed(
+        ctx,
+        f"📢 Announcement sent to {channel.mention}.",
+        title="📢 Announcement Sent",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
+
+
+@bot.hybrid_command(name="cs", description="Clear all saved snipes for this channel.")
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+async def cs(ctx: commands.Context):
+    """Clear all saved deleted-message snipes for the current channel."""
+    history = deleted_messages.get(ctx.channel.id)
+    cleared = len(history) if history else 0
+
+    if history:
+        history.clear()
+
+    await send_embed(
+        ctx,
+        f"🗑️ Cleared `{cleared}` saved snipe(s) from {ctx.channel.mention}.",
+        title="🧹 Snipes Cleared",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
+
+
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
@@ -867,6 +922,16 @@ async def help_command(ctx: commands.Context):
             "🏷️ Remove Forced Nickname",
             f"`{get_guild_prefix(ctx.guild)}unforcenick <user>`\n"
             "Removes the nickname lock.",
+        ),
+        (
+            "📢 Announce",
+            f"`{get_guild_prefix(ctx.guild)}announce #channel <text>`\n"
+            "Sends an announcement to the selected text channel.",
+        ),
+        (
+            "🧹 Clear Snipes",
+            f"`{get_guild_prefix(ctx.guild)}cs`\n"
+            "Clears all saved deleted-message snipes in the current channel.",
         ),
     ]
 
