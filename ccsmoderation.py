@@ -196,6 +196,15 @@ def disable_command(guild_id: int, command_name: str, disabled_by: int) -> None:
         )
 
 
+def enable_command(guild_id: int, command_name: str) -> bool:
+    with db_connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM disabled_commands WHERE guild_id = ? AND command_name = ?",
+            (guild_id, command_name.casefold()),
+        )
+        return cursor.rowcount > 0
+
+
 def get_guild_prefix(guild: Optional[discord.Guild]) -> str:
     if guild is None:
         return PREFIX
@@ -649,7 +658,7 @@ async def check_disabled_command(ctx: commands.Context) -> bool:
         return True
 
     command_name = ctx.command.qualified_name.casefold()
-    if command_name == "disable":
+    if command_name in {"disable", "enable"}:
         return True
 
     if is_command_disabled(ctx.guild.id, command_name):
@@ -932,6 +941,35 @@ async def disable(ctx: commands.Context, *, command_name: str):
         ctx,
         f"🔒 The `{command.qualified_name}` command is now disabled in this server.",
         title="🔒 Command Disabled",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
+
+
+@bot.hybrid_command(name="enable", description="Re-enable a command in this server.")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+async def enable(ctx: commands.Context, *, command_name: str):
+    command_name = command_name.strip().lstrip("/").casefold()
+    command = bot.get_command(command_name)
+
+    if command is None:
+        await send_error(ctx, f"❌ I couldn't find a command named `{command_name}`.")
+        return
+
+    if command.qualified_name.casefold() in {"disable", "enable"}:
+        await send_error(ctx, "❌ You can't disable or enable the command-management commands.")
+        return
+
+    if not is_command_disabled(ctx.guild.id, command.qualified_name):
+        await send_error(ctx, f"❌ The `{command.qualified_name}` command is not disabled in this server.")
+        return
+
+    enable_command(ctx.guild.id, command.qualified_name)
+    await send_embed(
+        ctx,
+        f"🔓 The `{command.qualified_name}` command is now enabled in this server.",
+        title="🔓 Command Enabled",
         color=discord.Color.green(),
         delete_after=7,
     )
@@ -1239,8 +1277,9 @@ async def help_command(ctx: commands.Context):
             f"`{get_guild_prefix(ctx.guild)}getsticks` — Show active and stopped stickies in the server.",
         ),
         (
-            "🔒 Disable",
-            f"`{get_guild_prefix(ctx.guild)}disable <cmd name>` — Disable a command in this server (Manage Server).",
+            "🔒 Command Control",
+            f"`{get_guild_prefix(ctx.guild)}disable <cmd name>` — Disable a command in this server (Manage Server).\n"
+            f"`{get_guild_prefix(ctx.guild)}enable <cmd name>` — Re-enable a disabled command (Manage Server).",
         ),
         (
             "🎁 Booster Roles",
