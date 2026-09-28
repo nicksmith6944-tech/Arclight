@@ -81,7 +81,23 @@ def init_database() -> None:
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
                 modlog_channel_id INTEGER,
-                prefix TEXT NOT NULL DEFAULT ','
+                prefix TEXT NOT NULL DEFAULT ',',
+                jail_role_id INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS booster_roles (
+                guild_id INTEGER NOT NULL,
+                owner_id INTEGER NOT NULL,
+                role_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, owner_id),
+                UNIQUE (guild_id, role_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS booster_role_gifts (
+                guild_id INTEGER NOT NULL,
+                role_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, role_id, user_id)
             );
             """
         )
@@ -103,6 +119,11 @@ def init_database() -> None:
         if "prefix" not in settings_columns:
             conn.execute(
                 "ALTER TABLE guild_settings ADD COLUMN prefix TEXT NOT NULL DEFAULT ','"
+            )
+
+        if "jail_role_id" not in settings_columns:
+            conn.execute(
+                "ALTER TABLE guild_settings ADD COLUMN jail_role_id INTEGER"
             )
 
 
@@ -444,23 +465,75 @@ async def resolve_member(
     return None
 
 
-async def get_or_create_jail_role(
-    guild: discord.Guild,
-) -> Optional[discord.Role]:
-    role = discord.utils.get(guild.roles, name=JAILED_ROLE_NAME)
+def get_configured_jail_role(guild: discord.Guild) -> Optional[discord.Role]:
+    """Return the jail role configured for this guild, if it still exists."""
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT jail_role_id FROM guild_settings WHERE guild_id = ?",
+            (guild.id,),
+        ).fetchone()
 
-    if role:
-        return role
+    if not row or not row["jail_role_id"]:
+        return None
 
-    try:
-        return await guild.create_role(
-            name=JAILED_ROLE_NAME,
-            reason="Creating moderation jail role",
+    return guild.get_role(int(row["jail_role_id"]))
+
+
+def set_configured_jail_role(guild: discord.Guild, role_id: Optional[int]) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT INTO guild_settings (guild_id, jail_role_id) VALUES (?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET jail_role_id = excluded.jail_role_id",
+            (guild.id, role_id),
         )
-    except discord.Forbidden:
+
+
+def get_booster_role(guild: discord.Guild, owner_id: int) -> Optional[discord.Role]:
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT role_id FROM booster_roles WHERE guild_id = ? AND owner_id = ?",
+            (guild.id, owner_id),
+        ).fetchone()
+
+    if not row:
         return None
-    except discord.HTTPException:
-        return None
+
+    return guild.get_role(int(row["role_id"]))
+
+
+def save_booster_role(guild: discord.Guild, owner_id: int, role_id: int) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT INTO booster_roles (guild_id, owner_id, role_id) VALUES (?, ?, ?) "
+            "ON CONFLICT(guild_id, owner_id) DO UPDATE SET role_id = excluded.role_id",
+            (guild.id, owner_id, role_id),
+        )
+
+
+def count_booster_gifts(guild: discord.Guild, role_id: int) -> int:
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM booster_role_gifts WHERE guild_id = ? AND role_id = ?",
+            (guild.id, role_id),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def booster_gift_exists(guild: discord.Guild, role_id: int, user_id: int) -> bool:
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM booster_role_gifts WHERE guild_id = ? AND role_id = ? AND user_id = ?",
+            (guild.id, role_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+def save_booster_gift(guild: discord.Guild, role_id: int, user_id: int) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO booster_role_gifts (guild_id, role_id, user_id) VALUES (?, ?, ?)",
+            (guild.id, role_id, user_id),
+        )
 
 
 # ============================================================
@@ -894,7 +967,8 @@ async def help_command(ctx: commands.Context):
         (
             "🔒 Jail",
             f"`{get_guild_prefix(ctx.guild)}jail <user> (reason)`\n"
-            "Removes the member's roles and gives them the Jailed role.",
+            "Removes the member's roles and gives them the configured jail role.\n"
+            f"`{get_guild_prefix(ctx.guild)}setjailrole <@role>` — Set the jail role (Manage Server).",
         ),
         (
             "🔓 Unjail",
@@ -915,6 +989,13 @@ async def help_command(ctx: commands.Context):
             "👢 Kick",
             f"`{get_guild_prefix(ctx.guild)}kick <user> (reason)`\n"
             "Kicks a member from the server.",
+        ),
+        (
+            "🎁 Booster Roles",
+            f"`{get_guild_prefix(ctx.guild)}br <role name>` — Create/rename your booster role.\n"
+            f"`{get_guild_prefix(ctx.guild)}br icon <emoji>` — Set its role icon.\n"
+            f"`{get_guild_prefix(ctx.guild)}br color <hex>` — Set its color, e.g. `f30606`.\n"
+            f"`{get_guild_prefix(ctx.guild)}br gift <member>` — Gift it to up to 4 members.",
         ),
         (
             "⚙️ Prefix",
@@ -1309,10 +1390,13 @@ async def jail(
         await send_error(ctx, message)
         return
 
-    jail_role = await get_or_create_jail_role(ctx.guild)
+    jail_role = get_configured_jail_role(ctx.guild)
 
     if jail_role is None:
-        await send_error(ctx, "❌ I couldn't create/find the Jailed role.")
+        await send_error(
+            ctx,
+            f"❌ No jail role is configured. Use `{get_guild_prefix(ctx.guild)}setjailrole @role` first.",
+        )
         return
 
     me = ctx.guild.me
@@ -1320,7 +1404,7 @@ async def jail(
     if me is None or jail_role >= me.top_role:
         await send_error(
             ctx,
-            "❌ The Jailed role must be below my highest role.",
+            "❌ The configured jail role must be below my highest role.",
         )
         return
 
@@ -1410,12 +1494,16 @@ async def unjail(
     *,
     reason: str = "No reason provided",
 ):
-    jail_role = discord.utils.get(
-        ctx.guild.roles,
-        name=JAILED_ROLE_NAME,
-    )
+    jail_role = get_configured_jail_role(ctx.guild)
 
-    if jail_role is None or jail_role not in member.roles:
+    if jail_role is None:
+        await send_error(
+            ctx,
+            f"❌ No jail role is configured. Use `{get_guild_prefix(ctx.guild)}setjailrole @role` first.",
+        )
+        return
+
+    if jail_role not in member.roles:
         await send_error(ctx, f"❌ {member.mention} is not currently jailed.")
         return
 
@@ -1660,6 +1748,247 @@ async def unban(
         "Unban",
         user,
         reason,
+    )
+
+
+# ============================================================
+# BOOSTER CUSTOM ROLES
+# ============================================================
+
+@bot.hybrid_command(
+    name="br",
+    description="Create or manage your server booster role.",
+)
+@commands.guild_only()
+@commands.bot_has_permissions(manage_roles=True)
+async def booster_role(ctx: commands.Context, *, arguments: str):
+    """
+    Booster role command supporting the requested prefix syntax:
+
+        ?br <role name>
+        ?br icon <emoji>
+        ?br color <hex>
+        ?br gift <member>
+
+    The slash version uses one `arguments` option with the same syntax.
+    """
+    author = ctx.author
+    if not isinstance(author, discord.Member) or author.premium_since is None:
+        await send_error(ctx, "❌ This command can only be used by server boosters.")
+        return
+
+    arguments = arguments.strip()
+    if not arguments:
+        await send_error(
+            ctx,
+            "❌ Usage: `?br <role name>`, `?br icon <emoji>`, `?br color <hex>`, or `?br gift <member>`.\n"
+            "For example: `?br My Custom Role` or `?br color f30606`.",
+        )
+        return
+
+    parts = arguments.split(maxsplit=1)
+    action = parts[0].casefold()
+    value = parts[1].strip() if len(parts) > 1 else ""
+
+    role = get_booster_role(ctx.guild, author.id)
+
+    # `?br <role name>` creates the role the first time, and renames the
+    # existing booster role on later uses so the command remains useful.
+    if action not in {"icon", "color", "gift"}:
+        role_name = arguments[:100].strip()
+        if not role_name:
+            await send_error(ctx, "❌ The role name cannot be empty.")
+            return
+
+        me = ctx.guild.me
+        if me is None or not me.guild_permissions.manage_roles:
+            await send_error(ctx, "❌ I need Manage Roles to create or edit booster roles.")
+            return
+
+        try:
+            if role is None:
+                role = await ctx.guild.create_role(
+                    name=role_name,
+                    reason=f"Booster custom role created for {author}.",
+                )
+                save_booster_role(ctx.guild, author.id, role.id)
+                await send_embed(
+                    ctx,
+                    f"✅ Created your booster role {role.mention}: **{role.name}**.",
+                    title="🎁 Booster Role Created",
+                    color=discord.Color.green(),
+                )
+            else:
+                if role >= me.top_role:
+                    await send_error(ctx, "❌ I can't edit your booster role because it is at or above my highest role.")
+                    return
+                await role.edit(name=role_name, reason=f"Booster role renamed by {author}.")
+                await send_embed(
+                    ctx,
+                    f"✅ Your booster role is now {role.mention}: **{role.name}**.",
+                    title="🏷️ Booster Role Updated",
+                    color=discord.Color.green(),
+                )
+        except discord.Forbidden:
+            await send_error(ctx, "❌ I couldn't create or edit your booster role. Check my Manage Roles permission and role position.")
+        except discord.HTTPException as error:
+            await send_error(ctx, f"❌ Discord rejected the role change: `{error}`")
+        return
+
+    if role is None:
+        await send_error(ctx, "❌ You don't have a booster role yet. Use `?br <role name>` first.")
+        return
+
+    me = ctx.guild.me
+    if me is None or role >= me.top_role:
+        await send_error(ctx, "❌ I can't edit that booster role because it is at or above my highest role.")
+        return
+
+    if action == "color":
+        if not value:
+            await send_error(ctx, "❌ Usage: `?br color <hex>` — example: `?br color f30606`.")
+            return
+
+        hex_value = value.strip().lstrip("#")
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", hex_value):
+            await send_error(ctx, "❌ Invalid color. Use exactly 6 hexadecimal characters, such as `f30606`.")
+            return
+
+        try:
+            await role.edit(
+                color=discord.Color(int(hex_value, 16)),
+                reason=f"Booster role color changed by {author}.",
+            )
+            await send_embed(
+                ctx,
+                f"✅ Updated {role.mention}'s color to `#{hex_value.lower()}`.",
+                title="🎨 Booster Role Color",
+                color=discord.Color(int(hex_value, 16)),
+            )
+        except discord.Forbidden:
+            await send_error(ctx, "❌ I couldn't change your booster role color. Check my Manage Roles permission.")
+        except discord.HTTPException as error:
+            await send_error(ctx, f"❌ Discord rejected the color change: `{error}`")
+        return
+
+    if action == "icon":
+        if "ROLE_ICONS" not in ctx.guild.features:
+            await send_error(ctx, "this feature is not available in this server")
+            return
+
+        if not value:
+            await send_error(ctx, "❌ Usage: `?br icon <emoji>` — example: `?br icon 🔥`.")
+            return
+
+        emoji_value = value.strip().split()[0]
+        try:
+            # Supports both Unicode emoji and Discord custom emoji strings.
+            if emoji_value.startswith("<:") or emoji_value.startswith("<a:"):
+                icon = discord.PartialEmoji.from_str(emoji_value)
+                if icon.id is None:
+                    raise ValueError
+                display_icon = icon
+            else:
+                display_icon = emoji_value
+
+            await role.edit(
+                display_icon=display_icon,
+                reason=f"Booster role icon changed by {author}.",
+            )
+            await send_embed(
+                ctx,
+                f"✅ Added {emoji_value} as the icon for {role.mention}.",
+                title="✨ Booster Role Icon",
+                color=discord.Color.green(),
+            )
+        except (ValueError, discord.InvalidArgument):
+            await send_error(ctx, "❌ I couldn't understand that emoji. Use a Unicode emoji or a custom Discord emoji.")
+        except discord.Forbidden:
+            await send_error(ctx, "❌ I couldn't change the role icon. Check my Manage Roles permission.")
+        except discord.HTTPException as error:
+            await send_error(ctx, f"❌ Discord rejected the role icon: `{error}`")
+        return
+
+    # gift
+    if not value:
+        await send_error(ctx, "❌ Usage: `?br gift <member>` — for example: `?br gift @User`.")
+        return
+
+    target = await resolve_member(ctx.guild, value)
+    if target is None:
+        await send_error(ctx, "❌ I couldn't find that member. Mention them or provide their user ID.")
+        return
+
+    if target.id == author.id:
+        await send_error(ctx, "❌ You already own your booster role.")
+        return
+
+    if booster_gift_exists(ctx.guild, role.id, target.id):
+        await send_error(ctx, f"❌ {target.mention} already has your gifted role.")
+        return
+
+    gift_count = count_booster_gifts(ctx.guild, role.id)
+    if gift_count >= 4:
+        await send_error(ctx, "❌ You can gift your booster role to a maximum of 4 members.")
+        return
+
+    if role in target.roles:
+        await send_error(ctx, f"❌ {target.mention} already has this role.")
+        return
+
+    try:
+        await target.add_roles(
+            role,
+            reason=f"Booster role gifted by {author}.",
+        )
+        save_booster_gift(ctx.guild, role.id, target.id)
+    except discord.Forbidden:
+        await send_error(ctx, "❌ I couldn't give that member the role. Check my Manage Roles permission and role hierarchy.")
+        return
+    except discord.HTTPException as error:
+        await send_error(ctx, f"❌ Discord rejected the role gift: `{error}`")
+        return
+
+    await send_embed(
+        ctx,
+        f"🎁 Gifted {role.mention} to {target.mention}.\n"
+        f"Gift slots used: `{gift_count + 1}/4`.",
+        title="🎁 Booster Role Gifted",
+        color=discord.Color.green(),
+    )
+
+
+# ============================================================
+# JAIL ROLE SETTINGS
+# ============================================================
+
+@bot.hybrid_command(
+    name="setjailrole",
+    description="Set the role that will be used by the jail command.",
+)
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+@commands.bot_has_permissions(manage_roles=True)
+async def setjailrole(ctx: commands.Context, role: discord.Role):
+    me = ctx.guild.me
+    if me is None:
+        await send_error(ctx, "❌ I couldn't determine my role in this server.")
+        return
+
+    if role.is_default():
+        await send_error(ctx, "❌ You can't use @everyone as the jail role.")
+        return
+
+    if role >= me.top_role:
+        await send_error(ctx, "❌ The jail role must be below my highest role so I can assign it.")
+        return
+
+    set_configured_jail_role(ctx.guild, role.id)
+    await send_embed(
+        ctx,
+        f"🔒 The jail role is now {role.mention}.",
+        title="🔒 Jail Role Set",
+        color=discord.Color.green(),
     )
 
 
@@ -2525,3 +2854,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
