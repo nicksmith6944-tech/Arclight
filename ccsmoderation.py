@@ -99,6 +99,28 @@ def init_database() -> None:
                 user_id INTEGER NOT NULL,
                 PRIMARY KEY (guild_id, role_id, user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS stickies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER NOT NULL,
+                created_at DATETIME NOT NULL,
+                stopped_at DATETIME
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stickies_channel_active
+            ON stickies (guild_id, channel_id, active);
+
+            CREATE TABLE IF NOT EXISTS disabled_commands (
+                guild_id INTEGER NOT NULL,
+                command_name TEXT NOT NULL,
+                disabled_by INTEGER NOT NULL,
+                disabled_at DATETIME NOT NULL,
+                PRIMARY KEY (guild_id, command_name)
+            );
             """
         )
 
@@ -127,6 +149,53 @@ def init_database() -> None:
             )
 
 
+def get_active_sticky(guild_id: int, channel_id: int) -> Optional[sqlite3.Row]:
+    with db_connect() as conn:
+        return conn.execute(
+            "SELECT * FROM stickies WHERE guild_id = ? AND channel_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+            (guild_id, channel_id),
+        ).fetchone()
+
+
+def create_sticky(guild_id: int, channel_id: int, content: str, created_by: int) -> int:
+    with db_connect() as conn:
+        conn.execute(
+            "UPDATE stickies SET active = 0, stopped_at = ? WHERE guild_id = ? AND channel_id = ? AND active = 1",
+            (datetime.now(timezone.utc).isoformat(), guild_id, channel_id),
+        )
+        cursor = conn.execute(
+            "INSERT INTO stickies (guild_id, channel_id, content, active, created_by, created_at) VALUES (?, ?, ?, 1, ?, ?)",
+            (guild_id, channel_id, content, created_by, datetime.now(timezone.utc).isoformat()),
+        )
+        return int(cursor.lastrowid)
+
+
+def stop_sticky(guild_id: int, channel_id: int) -> bool:
+    with db_connect() as conn:
+        cursor = conn.execute(
+            "UPDATE stickies SET active = 0, stopped_at = ? WHERE guild_id = ? AND channel_id = ? AND active = 1",
+            (datetime.now(timezone.utc).isoformat(), guild_id, channel_id),
+        )
+        return cursor.rowcount > 0
+
+
+def is_command_disabled(guild_id: int, command_name: str) -> bool:
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM disabled_commands WHERE guild_id = ? AND command_name = ?",
+            (guild_id, command_name.casefold()),
+        ).fetchone()
+    return row is not None
+
+
+def disable_command(guild_id: int, command_name: str, disabled_by: int) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO disabled_commands (guild_id, command_name, disabled_by, disabled_at) VALUES (?, ?, ?, ?)",
+            (guild_id, command_name.casefold(), disabled_by, datetime.now(timezone.utc).isoformat()),
+        )
+
+
 def get_guild_prefix(guild: Optional[discord.Guild]) -> str:
     if guild is None:
         return PREFIX
@@ -148,12 +217,13 @@ def set_guild_prefix(guild: discord.Guild, prefix: str) -> None:
 
 
 def get_command_prefix(bot: commands.Bot, message: discord.Message):
-    # Always accept the built-in "," prefix. If a server has a custom
-    # prefix, accept that one too.
+    # Always accept the built-in "," and "?" prefixes. If a server has a
+    # custom prefix, accept that one too.
     custom = get_guild_prefix(message.guild)
-    if custom == PREFIX:
-        return PREFIX
-    return [PREFIX, custom]
+    prefixes = [PREFIX, "?"]
+    if custom not in prefixes:
+        prefixes.append(custom)
+    return prefixes
 
 
 def get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -573,9 +643,47 @@ def cache_message(message: discord.Message) -> None:
     message_cache[message.channel.id].append(message)
 
 
+@bot.check
+async def check_disabled_command(ctx: commands.Context) -> bool:
+    if ctx.guild is None or ctx.command is None:
+        return True
+
+    command_name = ctx.command.qualified_name.casefold()
+    if command_name == "disable":
+        return True
+
+    if is_command_disabled(ctx.guild.id, command_name):
+        return False
+
+    return True
+
+
 # ============================================================
 # EVENTS
 # ============================================================
+async def refresh_sticky(channel: discord.TextChannel, sticky: sqlite3.Row) -> Optional[discord.Message]:
+    """Delete the previous sticky copy and send the sticky text again as a normal message."""
+    try:
+        async for message in channel.history(limit=25):
+            if message.author.id == bot.user.id and message.content == sticky["content"]:
+                try:
+                    await message.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+                break
+
+        return await channel.send(sticky["content"])
+    except (discord.Forbidden, discord.HTTPException) as error:
+        print(f"⚠️ Could not refresh sticky in #{channel.name}: {error}")
+        return None
+
+
+async def refresh_active_sticky(channel: discord.TextChannel) -> None:
+    sticky = get_active_sticky(channel.guild.id, channel.id)
+    if sticky is not None:
+        await refresh_sticky(channel, sticky)
+
+
 
 @bot.event
 async def on_ready():
@@ -668,6 +776,8 @@ async def on_message(message: discord.Message):
         print(f"⚠️ Unexpected on_message error: {error!r}")
     finally:
         await bot.process_commands(message)
+        if message.guild is not None and isinstance(message.channel, discord.TextChannel):
+            await refresh_active_sticky(message.channel)
 
 
 @bot.event
@@ -699,6 +809,132 @@ async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent)
     for message in reversed(cached):
         if message.id in deleted_ids:
             deleted_messages[payload.channel_id].appendleft(message)
+
+
+@bot.hybrid_command(name="stick", description="Stick a normal message to a channel.")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_messages=True)
+@commands.bot_has_permissions(send_messages=True, manage_messages=True)
+async def stick(ctx: commands.Context, *, arguments: str):
+    """Create a sticky message. A final channel mention is optional."""
+    arguments = arguments.strip()
+    target_channel = ctx.channel
+
+    channel_match = re.search(r"\s*<#(\d+)>\s*$", arguments)
+    if channel_match:
+        target_channel = ctx.guild.get_channel(int(channel_match.group(1)))
+        arguments = arguments[:channel_match.start()].rstrip()
+
+    if not isinstance(target_channel, discord.TextChannel):
+        await send_error(ctx, "❌ That isn't a text channel I can use.")
+        return
+
+    if not arguments:
+        await send_error(ctx, "❌ The sticky message cannot be empty.")
+        return
+
+    if len(arguments) > 2000:
+        await send_error(ctx, "❌ Sticky messages must be 2000 characters or fewer.")
+        return
+
+    me = ctx.guild.me
+    permissions = target_channel.permissions_for(me) if me else None
+    if permissions is None or not permissions.send_messages or not permissions.manage_messages:
+        await send_error(ctx, f"❌ I need Send Messages and Manage Messages in {target_channel.mention}.")
+        return
+
+    sticky_id = create_sticky(ctx.guild.id, target_channel.id, arguments, ctx.author.id)
+    sticky = get_active_sticky(ctx.guild.id, target_channel.id)
+    sent = await refresh_sticky(target_channel, sticky) if sticky else None
+
+    if sent is None:
+        stop_sticky(ctx.guild.id, target_channel.id)
+        await send_error(ctx, f"❌ I couldn't send the sticky message to {target_channel.mention}.")
+        return
+
+    await send_embed(
+        ctx,
+        f"📌 Sticky message `{sticky_id}` is now active in {target_channel.mention}.",
+        title="📌 Sticky Enabled",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
+
+
+@bot.hybrid_command(name="unstick", description="Stop the active sticky message in this channel.")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_messages=True)
+async def unstick(ctx: commands.Context):
+    if not stop_sticky(ctx.guild.id, ctx.channel.id):
+        await send_error(ctx, "❌ There is no active sticky message in this channel.")
+        return
+
+    await send_embed(
+        ctx,
+        "📌 The sticky message has been stopped.",
+        title="📌 Sticky Stopped",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
+
+
+@bot.hybrid_command(name="getsticks", description="Show active and stopped sticky messages in this server.")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_messages=True)
+async def getsticks(ctx: commands.Context):
+    with db_connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM stickies WHERE guild_id = ? ORDER BY id DESC",
+            (ctx.guild.id,),
+        ).fetchall()
+
+    if not rows:
+        await send_embed(ctx, "No sticky messages have been created in this server.", title="📌 Stickies")
+        return
+
+    lines = []
+    for row in rows:
+        channel = ctx.guild.get_channel(int(row["channel_id"]))
+        channel_name = channel.mention if channel else f"Deleted channel ({row['channel_id']})"
+        status = "🟢 Active" if row["active"] else "🔴 Stopped"
+        preview = clean_text(row["content"].replace("\n", " "), 100)
+        lines.append(f"`#{row['id']}` {status} • {channel_name} • `{preview}`")
+
+    embed = discord.Embed(
+        title="📌 Server Stickies",
+        description="\n".join(lines)[:4096],
+        color=discord.Color.blurple(),
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.hybrid_command(name="disable", description="Disable a command in this server.")
+@commands.guild_only()
+@commands.has_guild_permissions(manage_guild=True)
+async def disable(ctx: commands.Context, *, command_name: str):
+    command_name = command_name.strip().lstrip("/").casefold()
+    command = bot.get_command(command_name)
+
+    if command is None:
+        await send_error(ctx, f"❌ I couldn't find a command named `{command_name}`.")
+        return
+
+    if command.qualified_name.casefold() == "disable":
+        await send_error(ctx, "❌ You can't disable the `disable` command.")
+        return
+
+    if is_command_disabled(ctx.guild.id, command.qualified_name):
+        await send_error(ctx, f"❌ The `{command.qualified_name}` command is already disabled in this server.")
+        return
+
+    disable_command(ctx.guild.id, command.qualified_name, ctx.author.id)
+    await send_embed(
+        ctx,
+        f"🔒 The `{command.qualified_name}` command is now disabled in this server.",
+        title="🔒 Command Disabled",
+        color=discord.Color.green(),
+        delete_after=7,
+    )
 
 
 @bot.hybrid_command(description="Set your AFK status with an optional reason.")
@@ -826,6 +1062,12 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
     if isinstance(error, commands.CommandNotFound):
         return
+
+    if isinstance(error, commands.CheckFailure) and ctx.guild is not None and ctx.command is not None:
+        command_name = ctx.command.qualified_name.casefold()
+        if is_command_disabled(ctx.guild.id, command_name):
+            await send_error(ctx, f"❌ The `{command_name}` command is disabled in this server.")
+            return
 
     if isinstance(error, commands.MissingPermissions):
         await send_error(
@@ -989,6 +1231,16 @@ async def help_command(ctx: commands.Context):
             "👢 Kick",
             f"`{get_guild_prefix(ctx.guild)}kick <user> (reason)`\n"
             "Kicks a member from the server.",
+        ),
+        (
+            "📌 Stickies",
+            f"`{get_guild_prefix(ctx.guild)}stick <message> (channel)` — Stick a normal message to a channel.\n"
+            f"`{get_guild_prefix(ctx.guild)}unstick` — Stop the active sticky in this channel.\n"
+            f"`{get_guild_prefix(ctx.guild)}getsticks` — Show active and stopped stickies in the server.",
+        ),
+        (
+            "🔒 Disable",
+            f"`{get_guild_prefix(ctx.guild)}disable <cmd name>` — Disable a command in this server (Manage Server).",
         ),
         (
             "🎁 Booster Roles",
@@ -2854,4 +3106,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
