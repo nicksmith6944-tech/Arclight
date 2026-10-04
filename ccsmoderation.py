@@ -61,6 +61,18 @@ def init_database() -> None:
                 timestamp DATETIME NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS user_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                mod_id INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                timestamp DATETIME NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_user_notes_lookup
+            ON user_notes (guild_id, target_id, timestamp);
+
             CREATE INDEX IF NOT EXISTS idx_mod_logs_lookup
             ON mod_logs (guild_id, mod_id, action_type, timestamp);
 
@@ -1233,6 +1245,13 @@ async def help_command(ctx: commands.Context):
             "Shows a member's warning count and recent warnings.\n"
             f"`{get_guild_prefix(ctx.guild)}modlogs <user>`\n"
             "Shows a member's recent moderation history.",
+        ),
+        (
+            "📝 Notes",
+            f"`{get_guild_prefix(ctx.guild)}note <user> <note>`\n"
+            "Adds a persistent moderator note without affecting moderation stats.\n"
+            f"`{get_guild_prefix(ctx.guild)}notes <user>`\n"
+            "Shows all notes, when they were added, and which moderator added them.",
         ),
         (
             "🔇 Mute",
@@ -2577,6 +2596,144 @@ async def modlogs(
 
     embed.set_footer(text=f"User ID: {member.id} • Guild: {ctx.guild.name}")
     await ctx.send(embed=embed)
+
+
+# ============================================================
+# USER NOTES
+# ============================================================
+
+@bot.hybrid_command(name="note", description="Add a private moderation note to a member.")
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+async def note(
+    ctx: commands.Context,
+    member: discord.Member,
+    *,
+    note_text: str,
+):
+    """Add a persistent note to a member without counting it as a moderation action."""
+    note_text = note_text.strip()
+
+    if not note_text:
+        await send_error(ctx, "❌ The note cannot be empty.")
+        return
+
+    if len(note_text) > 2000:
+        await send_error(ctx, "❌ Notes must be 2000 characters or fewer.")
+        return
+
+    timestamp = datetime.now(timezone.utc)
+    with db_connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO user_notes (guild_id, target_id, mod_id, note, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                ctx.guild.id,
+                member.id,
+                ctx.author.id,
+                note_text,
+                timestamp.isoformat(),
+            ),
+        )
+        note_id = int(cursor.lastrowid)
+
+    await send_embed(
+        ctx,
+        f"📝 Note `#{note_id}` added to {member.mention}.\n"
+        f"Added by: {ctx.author.mention}\n"
+        f"Added: {discord.utils.format_dt(timestamp, style='R')}",
+        title="📝 Note Added",
+        color=discord.Color.green(),
+    )
+
+    await log_mod_action_channel(
+        ctx,
+        "Note Added",
+        member,
+        "Moderator note added",
+        extra=f"Note ID: `#{note_id}`\nNote: {clean_text(note_text, 900)}",
+    )
+
+
+@bot.hybrid_command(name="notes", description="Show all moderation notes for a member.")
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+async def notes(
+    ctx: commands.Context,
+    member: discord.Member,
+):
+    """Show every persistent note stored for a member in this server."""
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, mod_id, note, timestamp
+            FROM user_notes
+            WHERE guild_id = ? AND target_id = ?
+            ORDER BY id ASC
+            """,
+            (ctx.guild.id, member.id),
+        ).fetchall()
+
+    if not rows:
+        embed = discord.Embed(
+            title=f"📝 Notes — {member}",
+            description=f"No notes have been added for {member.mention}.",
+            color=discord.Color.blurple(),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"User ID: {member.id} • Guild: {ctx.guild.name}")
+        await ctx.send(embed=embed)
+        return
+
+    # Discord embeds have a 4096-character description limit. Split a long
+    # note history across multiple embeds while still showing every note.
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for index, row in enumerate(rows, 1):
+        moderator = ctx.guild.get_member(int(row["mod_id"]))
+        moderator_text = moderator.mention if moderator else f"<@{row['mod_id']}>"
+
+        try:
+            timestamp = datetime.fromisoformat(row["timestamp"])
+            when = (
+                f"{discord.utils.format_dt(timestamp, style='F')} "
+                f"({discord.utils.format_dt(timestamp, style='R')})"
+            )
+        except (ValueError, TypeError):
+            when = "Unknown time"
+
+        text = (
+            f"**#{row['id']}** • {when}\n"
+            f"**By:** {moderator_text}\n"
+            f"> {(row['note'] or '').strip()}"
+        )
+
+        if current and current_length + len(text) + 2 > 3900:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_length = 0
+
+        current.append(text)
+        current_length += len(text) + 2
+
+    if current:
+        chunks.append("\n\n".join(current))
+
+    for page, chunk in enumerate(chunks, 1):
+        embed = discord.Embed(
+            title=f"📝 Notes — {member}",
+            description=chunk,
+            color=discord.Color.blurple(),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(
+            text=f"{len(rows)} total note(s) • Page {page}/{len(chunks)} • User ID: {member.id}"
+        )
+        await ctx.send(embed=embed)
 
 
 # ============================================================
