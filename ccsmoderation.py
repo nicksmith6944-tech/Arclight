@@ -1685,7 +1685,7 @@ async def unmute(
 # JAIL / UNJAIL
 # ============================================================
 
-@bot.hybrid_command(description="Jail a member and save their current roles.")
+@bot.hybrid_command(description="Adds the soft ban role that has been set in the server to the target.")
 @commands.guild_only()
 @commands.has_permissions(moderate_members=True)
 @commands.bot_has_permissions(manage_roles=True)
