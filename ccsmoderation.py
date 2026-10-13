@@ -238,13 +238,13 @@ def set_guild_prefix(guild: discord.Guild, prefix: str) -> None:
 
 
 def get_command_prefix(bot: commands.Bot, message: discord.Message):
-    # Always accept the built-in "," and "?" prefixes. If a server has a
-    # custom prefix, accept that one too.
+    # Accept a direct mention of the bot, the built-in prefixes, and the
+    # server's configured custom prefix. discord.py handles both mention forms.
     custom = get_guild_prefix(message.guild)
     prefixes = [PREFIX, "?"]
     if custom not in prefixes:
         prefixes.append(custom)
-    return prefixes
+    return commands.when_mentioned_or(*prefixes)(bot, message)
 
 
 def get_modlog_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
@@ -1219,7 +1219,8 @@ async def help_command(ctx: commands.Context):
     embed = discord.Embed(
         title="📖 Moderation Bot — Help",
         description=(
-            f"Prefix: `{get_guild_prefix(ctx.guild)}`\n\n"
+            f"Prefix: `{get_guild_prefix(ctx.guild)}`\n"
+            f"Mention prefix: {bot.user.mention if bot.user else '@ArcLight'}\n\n"
             "**Arguments:** `<required>` • `(optional)`"
         ),
         color=discord.Color.blurple(),
