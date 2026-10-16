@@ -1312,7 +1312,9 @@ async def help_command(ctx: commands.Context):
         ),
         (
             "🎵 Music",
-            f"`{get_guild_prefix(ctx.guild)}play <song>` — Search and play a song in your VC.\n"
+            f"`{get_guild_prefix(ctx.guild)}join` — Join the voice channel you're in.\n"
+            f"`{get_guild_prefix(ctx.guild)}leave` — Leave voice (you must be in the same VC as the bot).\n"
+            f"`{get_guild_prefix(ctx.guild)}play <song>` — Search and play a song in your VC; joins automatically if disconnected.\n"
             f"`{get_guild_prefix(ctx.guild)}pause` / `{get_guild_prefix(ctx.guild)}unpause` — Pause or resume.\n"
             f"`{get_guild_prefix(ctx.guild)}skip` / `{get_guild_prefix(ctx.guild)}previous` — Change tracks.\n"
             f"`{get_guild_prefix(ctx.guild)}queue` — Show the current track and upcoming songs.",
@@ -1714,6 +1716,78 @@ async def advance_music_queue(guild_id: int, expected_generation: Optional[int] 
         await advance_music_queue(guild_id)
 
 
+@bot.hybrid_command(name="join", description="Join the voice channel you're currently in.")
+@commands.guild_only()
+async def join(ctx: commands.Context):
+    if not isinstance(ctx.author, discord.Member) or not ctx.author.voice or not ctx.author.voice.channel:
+        await send_error(ctx, "❌ Join a voice channel first, then use this command.")
+        return
+
+    user_channel = ctx.author.voice.channel
+    voice = ctx.guild.voice_client
+    if voice and voice.is_connected():
+        if voice.channel == user_channel:
+            await send_embed(
+                ctx,
+                f"✅ I'm already connected to {user_channel.mention}.",
+                title="🎧 Already Connected",
+                color=discord.Color.green(),
+            )
+        else:
+            await send_error(
+                ctx,
+                f"❌ I'm already in {voice.channel.mention}. Join that voice channel first; I won't switch channels automatically.",
+            )
+        return
+
+    try:
+        await user_channel.connect()
+    except (discord.Forbidden, discord.HTTPException) as error:
+        await send_error(ctx, f"❌ I couldn't join that voice channel: `{error}`")
+        return
+
+    await send_embed(
+        ctx,
+        f"✅ Joined {user_channel.mention}.",
+        title="🎧 Voice Connected",
+        color=discord.Color.green(),
+    )
+
+
+@bot.hybrid_command(name="leave", description="Leave the voice channel you're sharing with the bot.")
+@commands.guild_only()
+async def leave(ctx: commands.Context):
+    if not isinstance(ctx.author, discord.Member) or not ctx.author.voice or not ctx.author.voice.channel:
+        await send_error(ctx, "❌ Join the same voice channel as me before using this command.")
+        return
+
+    voice = ctx.guild.voice_client
+    if voice is None or not voice.is_connected():
+        await send_error(ctx, "❌ I'm not connected to a voice channel.")
+        return
+
+    if ctx.author.voice.channel != voice.channel:
+        await send_error(
+            ctx,
+            f"❌ I'm in {voice.channel.mention}. Join that same voice channel to make me leave.",
+        )
+        return
+
+    session = get_music_session(ctx.guild.id)
+    session["generation"] += 1
+    session["current"] = None
+    session["queue"].clear()
+    if voice.is_playing() or voice.is_paused():
+        voice.stop()
+    await voice.disconnect(force=True)
+    await send_embed(
+        ctx,
+        "👋 Disconnected from voice and cleared the music queue.",
+        title="🎧 Voice Disconnected",
+        color=discord.Color.green(),
+    )
+
+
 @bot.hybrid_command(name="play", description="Search for a song and play it in your voice channel.")
 @commands.guild_only()
 async def play(ctx: commands.Context, *, song: str):
@@ -1728,10 +1802,14 @@ async def play(ctx: commands.Context, *, song: str):
     voice_channel = ctx.author.voice.channel
     voice = ctx.guild.voice_client
     try:
-        if voice is None:
+        if voice is None or not voice.is_connected():
             voice = await voice_channel.connect()
         elif voice.channel != voice_channel:
-            await voice.move_to(voice_channel)
+            await send_error(
+                ctx,
+                f"❌ I'm already in {voice.channel.mention}. Join that voice channel to use music; I won't move away from the channel I'm in.",
+            )
+            return
     except (discord.Forbidden, discord.HTTPException) as error:
         await send_error(ctx, f"❌ I couldn't join that voice channel: `{error}`")
         return
