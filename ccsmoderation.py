@@ -1,6 +1,7 @@
 import os
 import asyncio
 import re
+import difflib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -1229,9 +1230,10 @@ async def help_command(ctx: commands.Context):
     commands_list = [
         (
             "🧹 Purge",
-            f"`{get_guild_prefix(ctx.guild)}purge <user_id> <amount>`\n"
-            f"`{get_guild_prefix(ctx.guild)}purge <user_id>`\n"
-            "Deletes messages from a specific user in the current channel.",
+            f"`{get_guild_prefix(ctx.guild)}purge` — Delete 1 recent message.\n"
+            f"`{get_guild_prefix(ctx.guild)}purge <amount>` — Delete that many recent messages.\n"
+            f"`{get_guild_prefix(ctx.guild)}purge <amount> <user_id>` — Delete that many messages from one user.\n"
+            f"`{get_guild_prefix(ctx.guild)}purge <user_id>` — Delete 1 recent message from one user.",
         ),
         (
             "🧹 Clean",
@@ -1307,6 +1309,13 @@ async def help_command(ctx: commands.Context):
             f"`{get_guild_prefix(ctx.guild)}br icon <emoji>` — Set its role icon.\n"
             f"`{get_guild_prefix(ctx.guild)}br color <hex>` — Set its color, e.g. `f30606`.\n"
             f"`{get_guild_prefix(ctx.guild)}br gift <member>` — Gift it to up to 4 members.",
+        ),
+        (
+            "🎵 Music",
+            f"`{get_guild_prefix(ctx.guild)}play <song>` — Search and play a song in your VC.\n"
+            f"`{get_guild_prefix(ctx.guild)}pause` / `{get_guild_prefix(ctx.guild)}unpause` — Pause or resume.\n"
+            f"`{get_guild_prefix(ctx.guild)}skip` / `{get_guild_prefix(ctx.guild)}previous` — Change tracks.\n"
+            f"`{get_guild_prefix(ctx.guild)}queue` — Show the current track and upcoming songs.",
         ),
         (
             "⚙️ Prefix",
@@ -1414,55 +1423,89 @@ async def clean(ctx: commands.Context):
 # PURGE
 # ============================================================
 
-@bot.hybrid_command(description="Delete messages from a specific user in the current channel.")
+@bot.hybrid_command(
+    name="purge",
+    description="Delete a number of recent messages, optionally from one user.",
+)
 @commands.guild_only()
 @commands.has_permissions(manage_messages=True)
 @commands.bot_has_permissions(manage_messages=True)
-async def purge(
-    ctx: commands.Context,
-    user_id: int,
-    amount: Optional[int] = None,
-):
-    if amount is not None and amount <= 0:
-        await send_error(ctx, "❌ Amount must be greater than 0.")
-        return
+async def purge(ctx: commands.Context, *, arguments: str = ""):
+    """
+    Usage:
+      ?purge                 -> delete 1 recent message
+      ?purge 10              -> delete 10 recent messages
+      ?purge 10 123456789012345678 -> delete up to 10 messages from that user
+      ?purge 123456789012345678    -> delete that user's most recent message
+      ?purge @user           -> delete that user's most recent message
+    """
+    tokens = arguments.split()
+    amount = 1
+    target_id = None
 
-    target = ctx.guild.get_member(user_id)
+    def parse_user_id(value: str) -> Optional[int]:
+        match = re.fullmatch(r"<@!?(\d+)>", value)
+        if match:
+            return int(match.group(1))
+        if value.isdigit() and len(value) >= 15:
+            return int(value)
+        return None
 
-    if target is None:
-        try:
-            target = await bot.fetch_user(user_id)
-        except (discord.NotFound, discord.HTTPException):
-            await send_error(ctx, "❌ I couldn't find that user ID.")
-            return
+    if tokens:
+        first_user_id = parse_user_id(tokens[0])
+        if first_user_id is not None:
+            target_id = first_user_id
+            if len(tokens) > 1:
+                await send_error(ctx, "❌ Usage: `?purge [amount] [user_id]` or `?purge user_id`.")
+                return
+        else:
+            try:
+                amount = int(tokens[0])
+            except ValueError:
+                await send_error(ctx, "❌ Amount must be a positive number.")
+                return
+
+            if amount < 1:
+                await send_error(ctx, "❌ Amount must be greater than 0.")
+                return
+            if amount > 1000:
+                await send_error(ctx, "❌ You can purge at most 1000 messages at a time.")
+                return
+
+            if len(tokens) >= 2:
+                target_id = parse_user_id(tokens[1])
+                if target_id is None:
+                    await send_error(ctx, "❌ The user ID must be a valid Discord ID or user mention.")
+                    return
+            if len(tokens) > 2:
+                await send_error(ctx, "❌ Usage: `?purge [amount] [user_id]`.")
+                return
 
     deleted_count = 0
+    # Keep the invoking command out of the count; delete it separately below.
+    try:
+        async for message in ctx.channel.history(limit=None):
+            if message.id == getattr(ctx.message, "id", None):
+                continue
+            if target_id is not None and message.author.id != target_id:
+                continue
 
-    # Discord's bulk delete has a 14-day limitation. Older messages
-    # are deleted one at a time.
-    async for message in ctx.channel.history(limit=None):
-        if message.author.id != target.id:
-            continue
-
-        if amount is not None and deleted_count >= amount:
-            break
-
-        try:
-            age = datetime.now(timezone.utc) - message.created_at
-
-            if age < timedelta(days=14):
+            try:
                 await message.delete()
-            else:
-                await message.delete()
+                deleted_count += 1
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                await send_error(ctx, "❌ I don't have permission to delete messages in this channel.")
+                return
+            except discord.HTTPException:
+                pass
 
-            deleted_count += 1
-        except discord.NotFound:
-            pass
-        except discord.Forbidden:
-            await send_error(ctx, "❌ I don't have permission to delete that message.")
-            break
-        except discord.HTTPException:
-            pass
+            if deleted_count >= amount:
+                break
+    except discord.Forbidden:
+        await send_error(ctx, "❌ I don't have permission to read channel history.")
+        return
 
     if ctx.message is not None:
         try:
@@ -1470,28 +1513,369 @@ async def purge(
         except discord.HTTPException:
             pass
 
+    target_text = f" from <@{target_id}>" if target_id is not None else ""
     await send_embed(
         ctx,
-        f"🧹 Deleted `{deleted_count}` message(s) from {target.mention}.\n"
+        f"🧹 Deleted `{deleted_count}` message(s){target_text}.\n"
         f"Responsible Moderator: {ctx.author.mention}",
+        title="🧹 Purge Complete",
+        color=discord.Color.green(),
         delete_after=7,
     )
 
     log_moderation_action(
         ctx.guild.id,
         ctx.author.id,
-        target.id,
+        target_id or ctx.author.id,
         "purge",
-        f"Messages purged: {deleted_count}",
+        f"Messages purged: {deleted_count}; target user ID: {target_id or 'any user'}",
     )
-
     await log_mod_action_channel(
         ctx,
         "Purge",
-        target,
+        ctx.guild.get_member(target_id) if target_id and ctx.guild.get_member(target_id) else (f"User ID {target_id}" if target_id else "All users"),
         "Messages purged",
         extra=f"Messages deleted: `{deleted_count}`",
     )
+
+
+# ============================================================
+# MUSIC (YouTube search + Discord voice playback)
+# ============================================================
+
+# Requires: discord.py[voice], PyNaCl, yt-dlp, and FFmpeg installed on the host.
+# Search is performed against YouTube results. Spotify links are not streamed
+# directly; Spotify's API does not provide playable audio URLs for Discord VC.
+music_sessions: dict[int, dict] = {}
+
+
+def get_music_session(guild_id: int) -> dict:
+    if guild_id not in music_sessions:
+        music_sessions[guild_id] = {
+            "queue": deque(),
+            "history": deque(maxlen=50),
+            "current": None,
+            "generation": 0,
+        }
+    return music_sessions[guild_id]
+
+
+def normalize_song_text(value: str) -> str:
+    value = value.casefold()
+    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def search_youtube_song(query: str) -> dict:
+    """Search YouTube and pick the best title match, tolerating common typos."""
+    try:
+        import yt_dlp
+    except ImportError as error:
+        raise RuntimeError("yt-dlp is not installed. Install it with `pip install -U yt-dlp`.") from error
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "default_search": "ytsearch8",
+        "noplaylist": True,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(f"ytsearch8:{query}", download=False)
+
+    entries = [entry for entry in (info or {}).get("entries", []) if entry]
+    if not entries:
+        raise LookupError("No matching songs were found.")
+
+    wanted = normalize_song_text(query)
+
+    def score(entry):
+        title = normalize_song_text(entry.get("title", ""))
+        uploader = normalize_song_text(entry.get("uploader") or entry.get("channel") or "")
+        title_ratio = difflib.SequenceMatcher(None, wanted, title).ratio()
+        combined_ratio = difflib.SequenceMatcher(None, wanted, f"{title} {uploader}").ratio()
+        wanted_words = set(wanted.split())
+        title_words = set(title.split())
+        overlap = len(wanted_words & title_words) / max(1, len(wanted_words))
+        return (0.72 * title_ratio) + (0.18 * combined_ratio) + (0.10 * overlap)
+
+    best = max(entries, key=score)
+    video_id = best.get("id")
+    webpage_url = best.get("webpage_url") or (f"https://www.youtube.com/watch?v={video_id}" if video_id else None)
+    if not webpage_url:
+        raise LookupError("The best search result did not include a playable link.")
+
+    # Re-extract the chosen result to get a direct audio stream URL.
+    stream_options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "format": "bestaudio/best",
+        "noplaylist": True,
+    }
+    with yt_dlp.YoutubeDL(stream_options) as ydl:
+        full = ydl.extract_info(webpage_url, download=False)
+
+    formats = full.get("formats", []) if full else []
+    audio_formats = [
+        item for item in formats
+        if item.get("url") and item.get("acodec") not in (None, "none")
+    ]
+    audio_url = max(audio_formats, key=lambda item: item.get("abr") or item.get("tbr") or 0)["url"] if audio_formats else (full or {}).get("url")
+    if not audio_url:
+        raise LookupError("I found the song, but couldn't get an audio stream for it.")
+
+    return {
+        "title": (full or best).get("title", best.get("title", "Unknown title")),
+        "url": audio_url,
+        "webpage_url": (full or best).get("webpage_url") or webpage_url,
+        "duration": (full or best).get("duration"),
+        "requester": None,
+    }
+
+
+def format_track_duration(seconds) -> str:
+    if not seconds:
+        return "Live/unknown length"
+    seconds = int(seconds)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+async def start_music_track(guild: discord.Guild, track: dict, *, remember_current: bool = True):
+    session = get_music_session(guild.id)
+    voice = guild.voice_client
+
+    if voice is None or not voice.is_connected():
+        session["current"] = None
+        return
+
+    previous_track = session.get("current")
+    if remember_current and previous_track is not None:
+        session["history"].append(previous_track)
+
+    session["generation"] += 1
+    generation = session["generation"]
+    session["current"] = track
+
+    audio_source = discord.FFmpegPCMAudio(
+        track["url"],
+        before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+        options="-vn",
+    )
+
+    def after_playback(error):
+        if error:
+            print(f"Music playback error in guild {guild.id}: {error!r}")
+
+        def schedule_next():
+            asyncio.run_coroutine_threadsafe(advance_music_queue(guild.id, generation), bot.loop)
+
+        # Ignore callbacks from a track that was manually replaced/stopped.
+        if session.get("generation") == generation:
+            schedule_next()
+
+    try:
+        voice.play(audio_source, after=after_playback)
+    except Exception:
+        session["current"] = None
+        raise
+
+
+async def advance_music_queue(guild_id: int, expected_generation: Optional[int] = None):
+    session = get_music_session(guild_id)
+    if expected_generation is not None and session["generation"] != expected_generation:
+        return
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    finished = session.get("current")
+    if finished is not None:
+        session["history"].append(finished)
+    session["current"] = None
+
+    if not session["queue"]:
+        return
+
+    next_track = session["queue"].popleft()
+    try:
+        await start_music_track(guild, next_track, remember_current=False)
+        text_channel = bot.get_channel(next_track.get("text_channel_id"))
+        if text_channel:
+            await text_channel.send(
+                f"🎶 Now playing **[{next_track['title']}]({next_track['webpage_url']})**"
+            )
+    except Exception as error:
+        print(f"Could not start queued music in guild {guild_id}: {error!r}")
+        await advance_music_queue(guild_id)
+
+
+@bot.hybrid_command(name="play", description="Search for a song and play it in your voice channel.")
+@commands.guild_only()
+async def play(ctx: commands.Context, *, song: str):
+    if not song.strip():
+        await send_error(ctx, "❌ Give me a song name to search for.")
+        return
+
+    if not isinstance(ctx.author, discord.Member) or not ctx.author.voice or not ctx.author.voice.channel:
+        await send_error(ctx, "❌ Join a voice channel first.")
+        return
+
+    voice_channel = ctx.author.voice.channel
+    voice = ctx.guild.voice_client
+    try:
+        if voice is None:
+            voice = await voice_channel.connect()
+        elif voice.channel != voice_channel:
+            await voice.move_to(voice_channel)
+    except (discord.Forbidden, discord.HTTPException) as error:
+        await send_error(ctx, f"❌ I couldn't join that voice channel: `{error}`")
+        return
+
+    await ctx.send(f"🔎 Finding the best match for **{clean_text(song, 150)}**…")
+    try:
+        track = await asyncio.to_thread(search_youtube_song, song)
+    except (LookupError, RuntimeError) as error:
+        await send_error(ctx, f"❌ {error}")
+        return
+    except Exception as error:
+        print(f"YouTube music search failed: {error!r}")
+        await send_error(ctx, "❌ Search failed. Check whether yt-dlp is installed and up to date.")
+        return
+
+    track["requester"] = ctx.author.id
+    track["text_channel_id"] = ctx.channel.id
+    session = get_music_session(ctx.guild.id)
+
+    if voice.is_playing() or voice.is_paused() or session.get("current") is not None:
+        session["queue"].append(track)
+        position = len(session["queue"])
+        await send_embed(
+            ctx,
+            f"➕ Added **[{track['title']}]({track['webpage_url']})** to the queue at position `{position}`.",
+            title="🎵 Added to Queue",
+            color=discord.Color.green(),
+        )
+        return
+
+    try:
+        await start_music_track(ctx.guild, track, remember_current=False)
+    except Exception as error:
+        print(f"Could not start music: {error!r}")
+        await send_error(ctx, "❌ I couldn't start playback. Make sure FFmpeg is installed on the host.")
+        return
+
+    await send_embed(
+        ctx,
+        f"🎶 Now playing **[{track['title']}]({track['webpage_url']})**\n"
+        f"Requested by {ctx.author.mention} • `{format_track_duration(track.get('duration'))}`",
+        title="🎵 Now Playing",
+        color=discord.Color.green(),
+    )
+
+
+@bot.hybrid_command(name="pause", description="Pause the current song.")
+@commands.guild_only()
+async def pause(ctx: commands.Context):
+    voice = ctx.guild.voice_client
+    if voice and voice.is_playing():
+        voice.pause()
+        await send_embed(ctx, "⏸️ Playback paused.", title="Music Paused", color=discord.Color.green())
+    else:
+        await send_error(ctx, "❌ Nothing is currently playing.")
+
+
+@bot.hybrid_command(name="unpause", description="Resume the paused song.")
+@commands.guild_only()
+async def unpause(ctx: commands.Context):
+    voice = ctx.guild.voice_client
+    if voice and voice.is_paused():
+        voice.resume()
+        await send_embed(ctx, "▶️ Playback resumed.", title="Music Resumed", color=discord.Color.green())
+    else:
+        await send_error(ctx, "❌ Playback isn't paused.")
+
+
+@bot.hybrid_command(name="skip", description="Skip the current song.")
+@commands.guild_only()
+async def skip(ctx: commands.Context):
+    voice = ctx.guild.voice_client
+    session = get_music_session(ctx.guild.id)
+    if voice is None or not (voice.is_playing() or voice.is_paused()):
+        await send_error(ctx, "❌ Nothing is currently playing.")
+        return
+
+    # Invalidate the old audio callback before stopping the player.
+    session["generation"] += 1
+    voice.stop()
+    await advance_music_queue(ctx.guild.id)
+    await send_embed(ctx, "⏭️ Skipped the current song.", title="Song Skipped", color=discord.Color.green())
+
+
+@bot.hybrid_command(name="previous", description="Replay the previous song.")
+@commands.guild_only()
+async def previous(ctx: commands.Context):
+    voice = ctx.guild.voice_client
+    session = get_music_session(ctx.guild.id)
+    if voice is None or not session["history"]:
+        await send_error(ctx, "❌ There isn't a previous song to play.")
+        return
+
+    previous_track = session["history"].pop()
+    current = session.get("current")
+    if current is not None:
+        session["queue"].appendleft(current)
+
+    session["generation"] += 1
+    if voice.is_playing() or voice.is_paused():
+        voice.stop()
+
+    try:
+        await start_music_track(ctx.guild, previous_track, remember_current=False)
+        await send_embed(
+            ctx,
+            f"⏮️ Replaying **[{previous_track['title']}]({previous_track['webpage_url']})**.",
+            title="Previous Song",
+            color=discord.Color.green(),
+        )
+    except Exception as error:
+        print(f"Could not replay previous song: {error!r}")
+        await send_error(ctx, "❌ I couldn't replay the previous song.")
+
+
+@bot.hybrid_command(name="queue", description="Show the current song and upcoming songs.")
+@commands.guild_only()
+async def queue(ctx: commands.Context):
+    session = get_music_session(ctx.guild.id)
+    current = session.get("current")
+    queued = list(session["queue"])
+
+    embed = discord.Embed(title="🎶 Music Queue", color=discord.Color.blurple())
+    if current:
+        embed.add_field(
+            name="▶️ Now Playing",
+            value=f"[{clean_text(current['title'], 200)}]({current['webpage_url']})",
+            inline=False,
+        )
+    else:
+        embed.description = "Nothing is currently playing."
+
+    if queued:
+        lines = [
+            f"`{index}.` [{clean_text(track['title'], 150)}]({track['webpage_url']})"
+            for index, track in enumerate(queued[:15], start=1)
+        ]
+        if len(queued) > 15:
+            lines.append(f"…and `{len(queued) - 15}` more song(s).")
+        embed.add_field(name="⏭️ Up Next", value="\\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="⏭️ Up Next", value="The queue is empty.", inline=False)
+
+    await ctx.send(embed=embed)
 
 
 # ============================================================
