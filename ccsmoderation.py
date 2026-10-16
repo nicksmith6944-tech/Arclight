@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 import difflib
+import random
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -1317,7 +1318,8 @@ async def help_command(ctx: commands.Context):
             f"`{get_guild_prefix(ctx.guild)}play <song>` — Search and play a song in your VC; joins automatically if disconnected.\n"
             f"`{get_guild_prefix(ctx.guild)}pause` / `{get_guild_prefix(ctx.guild)}unpause` — Pause or resume.\n"
             f"`{get_guild_prefix(ctx.guild)}skip` / `{get_guild_prefix(ctx.guild)}previous` — Change tracks.\n"
-            f"`{get_guild_prefix(ctx.guild)}queue` — Show the current track and upcoming songs.",
+            f"`{get_guild_prefix(ctx.guild)}queue` — Show the current track and upcoming songs.\n"
+            f"`{get_guild_prefix(ctx.guild)}shuffle` — Shuffle the upcoming music queue.",
         ),
         (
             "⚙️ Prefix",
@@ -1943,6 +1945,29 @@ async def previous(ctx: commands.Context):
     except Exception as error:
         print(f"Could not replay previous song: {error!r}")
         await send_error(ctx, "❌ I couldn't replay the previous song.")
+
+
+@bot.hybrid_command(name="shuffle", description="Shuffle the upcoming songs in the music queue.")
+@commands.guild_only()
+async def shuffle(ctx: commands.Context):
+    """Randomize upcoming tracks without interrupting the currently playing song."""
+    session = get_music_session(ctx.guild.id)
+    queued = list(session["queue"])
+
+    if len(queued) < 2:
+        await send_error(ctx, "❌ Add at least two songs to the queue before shuffling.")
+        return
+
+    random.shuffle(queued)
+    session["queue"].clear()
+    session["queue"].extend(queued)
+
+    await send_embed(
+        ctx,
+        f"🔀 Shuffled `{len(queued)}` upcoming songs. The current song (if any) will keep playing.",
+        title="Queue Shuffled",
+        color=discord.Color.green(),
+    )
 
 
 @bot.hybrid_command(name="queue", description="Show the current song and upcoming songs.")
