@@ -1647,18 +1647,29 @@ def spotify_api_get(url: str, *, user_auth: bool = False):
         with urlopen(request, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
+        # Preserve Spotify's response body in the diagnostic message. Previously every
+        # user-auth 403 was converted to the same generic ownership/scope message, which
+        # made it impossible to tell the actual cause from the bot's error.
+        try:
+            response_body = error.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            response_body = ""
         if error.code == 401:
             cache["access_token"] = None
             raise RuntimeError("Spotify authentication expired; try the command again.") from error
         if error.code == 403:
             if user_auth:
+                detail = f" Spotify response: {response_body}" if response_body else ""
                 raise RuntimeError(
-                    "Spotify still denied this playlist. Make sure the authorized Spotify account "
-                    "owns the playlist or collaborates on it, and re-authorize with the "
-                    "playlist-read-private scope."
+                    "Spotify returned HTTP 403 while reading playlist items. Check that the "
+                    "authorized account owns/is a collaborator on this playlist and is allowed "
+                    "to use this Spotify developer app. Re-authorize with playlist-read-private "
+                    f"and playlist-read-collaborative if needed.{detail}"
                 ) from error
+            detail = f" Spotify response: {response_body}" if response_body else ""
             raise RuntimeError(
                 "Spotify denied access to this item. Check your Spotify developer app's API access."
+                f"{detail}"
             ) from error
         if error.code == 404:
             raise RuntimeError("That Spotify track, album, or playlist could not be found.") from error
