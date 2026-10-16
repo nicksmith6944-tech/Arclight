@@ -1696,6 +1696,51 @@ def search_youtube_song(query: str) -> dict:
     except ImportError as error:
         raise RuntimeError("yt-dlp is not installed. Add `yt-dlp` to requirements.txt and redeploy.") from error
 
+    # If the user supplies a URL, extract that URL directly instead of
+    # searching YouTube for the URL as if it were a song title.
+    direct_url = query.strip()
+    is_url = bool(re.match(r"^https?://", direct_url, re.IGNORECASE))
+
+    # Shared options for resolving a playable audio stream.
+    stream_options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        # These are normal extractor preferences, not authentication credentials.
+        "extractor_args": {"youtube": {"player_client": ["mweb", "android_vr"]}},
+    }
+
+    if is_url:
+        try:
+            with yt_dlp.YoutubeDL(stream_options) as ydl:
+                full = ydl.extract_info(direct_url, download=False)
+            if not full:
+                raise LookupError("I couldn't resolve that link into a playable track.")
+            formats = full.get("formats", [])
+            audio_formats = [
+                item for item in formats
+                if item.get("url") and item.get("acodec") not in (None, "none")
+            ]
+            audio_url = (
+                max(audio_formats, key=lambda item: item.get("abr") or item.get("tbr") or 0)["url"]
+                if audio_formats else full.get("url")
+            )
+            if not audio_url:
+                raise LookupError("That link resolved, but it doesn't provide a playable audio stream.")
+            return {
+                "title": full.get("title", direct_url),
+                "url": audio_url,
+                "webpage_url": full.get("webpage_url") or direct_url,
+                "duration": full.get("duration"),
+                "requester": None,
+            }
+        except (LookupError, RuntimeError):
+            raise
+        except Exception as error:
+            raise LookupError(f"Couldn't play that link directly: {str(error)[:220]}") from error
+
     # Keep search resilient: one blocked result should not abort all candidates.
     options = {
         "quiet": True,
@@ -1729,16 +1774,6 @@ def search_youtube_song(query: str) -> dict:
     # allowing another, so don't fail the entire request on the first error.
     entries.sort(key=score, reverse=True)
     failures = []
-    stream_options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        # These are normal extractor preferences, not authentication credentials.
-        "extractor_args": {"youtube": {"player_client": ["mweb", "android_vr"]}},
-    }
-
     for candidate in entries:
         video_id = candidate.get("id")
         webpage_url = candidate.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}"
