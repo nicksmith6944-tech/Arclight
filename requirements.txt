@@ -2,4 +2,5 @@ discord.py
 python-dotenv
 discord.py[voice]
 PyNaCl
+davey
 yt-dlp
