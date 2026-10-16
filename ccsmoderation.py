@@ -1,4 +1,5 @@
 import os
+import base64
 import asyncio
 import re
 import difflib
@@ -1570,6 +1571,124 @@ def normalize_song_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+
+# Spotify URL support uses the official Web API for metadata only.
+# Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in the hosting panel.
+_spotify_token_cache = {"access_token": None, "expires_at": 0}
+
+
+def spotify_api_get(url: str):
+    """GET Spotify Web API JSON using the client-credentials flow."""
+    import json
+    import time
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    client_id = os.getenv("SPOTIFY_CLIENT_ID")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "Spotify links need SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET "
+            "set as environment variables on the hosting panel."
+        )
+
+    token = _spotify_token_cache.get("access_token")
+    if not token or time.time() >= _spotify_token_cache.get("expires_at", 0):
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        token_request = Request(
+            "https://accounts.spotify.com/api/token",
+            data=b"grant_type=client_credentials",
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(token_request, timeout=15) as response:
+                token_data = json.loads(response.read().decode("utf-8"))
+        except Exception as error:
+            raise RuntimeError(
+                "Couldn't authenticate with Spotify. Check the Client ID/Secret and app access."
+            ) from error
+        token = token_data.get("access_token")
+        if not token:
+            raise RuntimeError("Spotify didn't return an access token for this app.")
+        _spotify_token_cache["access_token"] = token
+        _spotify_token_cache["expires_at"] = time.time() + int(token_data.get("expires_in", 3600)) - 60
+
+    request = Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        if error.code == 401:
+            _spotify_token_cache["access_token"] = None
+            raise RuntimeError("Spotify authentication expired; try the command again.") from error
+        if error.code == 403:
+            raise RuntimeError(
+                "Spotify denied access to this item. Make sure the track/playlist is public "
+                "and your developer app has API access."
+            ) from error
+        if error.code == 404:
+            raise RuntimeError("That Spotify track, album, or playlist could not be found.") from error
+        raise RuntimeError(f"Spotify API returned HTTP {error.code}.") from error
+    except URLError as error:
+        raise RuntimeError("Couldn't reach Spotify's API from this host.") from error
+
+
+def spotify_tracks_from_url(value: str):
+    """
+    Return Spotify metadata for a track, album, or playlist URL.
+    Returns None for non-Spotify inputs. This does not provide audio streams.
+    """
+    match = re.search(
+        r"(?:https?://)?open\.spotify\.com/(track|album|playlist)/([A-Za-z0-9]+)",
+        value.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    kind, spotify_id = match.group(1).lower(), match.group(2)
+    if kind == "track":
+        item = spotify_api_get(f"https://api.spotify.com/v1/tracks/{spotify_id}")
+        items = [item]
+    elif kind == "album":
+        album = spotify_api_get(f"https://api.spotify.com/v1/albums/{spotify_id}")
+        album_tracks = spotify_api_get(
+            f"https://api.spotify.com/v1/albums/{spotify_id}/tracks?limit=50"
+        )
+        items = album_tracks.get("items", [])
+        for item in items:
+            item.setdefault("album", {"name": album.get("name", "")})
+    else:
+        playlist = spotify_api_get(f"https://api.spotify.com/v1/playlists/{spotify_id}/tracks?limit=50")
+        items = [entry.get("track") for entry in playlist.get("items", []) if entry.get("track")]
+
+    tracks = []
+    for item in items:
+        if not item or item.get("type", "track") != "track" or not item.get("name"):
+            continue
+        artists = ", ".join(
+            artist.get("name", "") for artist in item.get("artists", []) if artist.get("name")
+        )
+        if item.get("is_local"):
+            continue
+        tracks.append({
+            "title": item["name"],
+            "artists": artists or "Unknown artist",
+            "spotify_url": item.get("external_urls", {}).get("spotify", value),
+        })
+        # Avoid turning a giant playlist into hundreds of extraction attempts.
+        if len(tracks) >= 25:
+            break
+
+    if not tracks:
+        raise LookupError("I couldn't find any playable track metadata in that Spotify link.")
+    return tracks
+
+
 def search_youtube_song(query: str) -> dict:
     """Search YouTube, rank likely title matches, and skip blocked/unplayable results."""
     try:
@@ -1836,46 +1955,77 @@ async def play(ctx: commands.Context, *, song: str):
         await send_error(ctx, f"❌ I couldn't join that voice channel: `{error}`")
         return
 
-    await ctx.send(f"🔎 Finding the best match for **{clean_text(song, 150)}**…")
+    await ctx.send(f"🔎 Resolving **{clean_text(song, 150)}**…")
     try:
-        track = await asyncio.to_thread(search_youtube_song, song)
+        spotify_tracks = await asyncio.to_thread(spotify_tracks_from_url, song)
+        search_items = spotify_tracks if spotify_tracks is not None else [
+            {"title": song, "artists": "", "spotify_url": None}
+        ]
+
+        resolved_tracks = []
+        # Spotify URLs become title/artist queries before the audio search.
+        for item in search_items:
+            query = f"{item['title']} {item.get('artists', '')}".strip()
+            track = await asyncio.to_thread(search_youtube_song, query)
+            track["spotify_url"] = item.get("spotify_url")
+            track["requester"] = ctx.author.id
+            track["text_channel_id"] = ctx.channel.id
+            resolved_tracks.append(track)
     except (LookupError, RuntimeError) as error:
         await send_error(ctx, f"❌ {error}")
         return
     except Exception as error:
-        print(f"YouTube music search failed: {error!r}")
-        await send_error(ctx, "❌ Search failed. Check whether yt-dlp is installed and up to date.")
+        print(f"Music search failed: {error!r}")
+        await send_error(ctx, "❌ Music search failed. Check the host logs for the underlying error.")
         return
 
-    track["requester"] = ctx.author.id
-    track["text_channel_id"] = ctx.channel.id
     session = get_music_session(ctx.guild.id)
+    was_busy = voice.is_playing() or voice.is_paused() or session.get("current") is not None
 
-    if voice.is_playing() or voice.is_paused() or session.get("current") is not None:
-        session["queue"].append(track)
-        position = len(session["queue"])
-        await send_embed(
-            ctx,
-            f"➕ Added **[{track['title']}]({track['webpage_url']})** to the queue at position `{position}`.",
-            title="🎵 Added to Queue",
-            color=discord.Color.green(),
-        )
+    if was_busy:
+        session["queue"].extend(resolved_tracks)
+        first_position = len(session["queue"]) - len(resolved_tracks) + 1
+        if len(resolved_tracks) == 1:
+            track = resolved_tracks[0]
+            await send_embed(
+                ctx,
+                f"➕ Added **[{track['title']}]({track['webpage_url']})** to the queue at position `{first_position}`.",
+                title="🎵 Added to Queue",
+                color=discord.Color.green(),
+            )
+        else:
+            await send_embed(
+                ctx,
+                f"➕ Added `{len(resolved_tracks)}` tracks from Spotify to the queue "
+                f"(positions `{first_position}`–`{first_position + len(resolved_tracks) - 1}`).",
+                title="🎵 Spotify Tracks Queued",
+                color=discord.Color.green(),
+            )
         return
 
+    first_track, *remaining_tracks = resolved_tracks
+    session["queue"].extend(remaining_tracks)
     try:
-        await start_music_track(ctx.guild, track, remember_current=False)
+        await start_music_track(ctx.guild, first_track, remember_current=False)
     except Exception as error:
         print(f"Could not start music: {error!r}")
         await send_error(ctx, "❌ I couldn't start playback. Make sure FFmpeg is installed on the host.")
         return
 
-    await send_embed(
-        ctx,
-        f"🎶 Now playing **[{track['title']}]({track['webpage_url']})**\n"
-        f"Requested by {ctx.author.mention} • `{format_track_duration(track.get('duration'))}`",
-        title="🎵 Now Playing",
-        color=discord.Color.green(),
-    )
+    if len(resolved_tracks) == 1:
+        description = (
+            f"🎶 Now playing **[{first_track['title']}]({first_track['webpage_url']})**\n"
+            f"Requested by {ctx.author.mention} • `{format_track_duration(first_track.get('duration'))}`"
+        )
+        title = "🎵 Now Playing"
+    else:
+        description = (
+            f"🎶 Started **[{first_track['title']}]({first_track['webpage_url']})** and queued "
+            f"`{len(remaining_tracks)}` more track(s) from Spotify.\nRequested by {ctx.author.mention}"
+        )
+        title = "🎵 Spotify Queue Started"
+
+    await send_embed(ctx, description, title=title, color=discord.Color.green())
 
 
 @bot.hybrid_command(name="pause", description="Pause the current song.")
