@@ -1569,12 +1569,13 @@ def normalize_song_text(value: str) -> str:
 
 
 def search_youtube_song(query: str) -> dict:
-    """Search YouTube and pick the best title match, tolerating common typos."""
+    """Search YouTube, rank likely title matches, and skip blocked/unplayable results."""
     try:
         import yt_dlp
     except ImportError as error:
-        raise RuntimeError("yt-dlp is not installed. Install it with `pip install -U yt-dlp`.") from error
+        raise RuntimeError("yt-dlp is not installed. Add `yt-dlp` to requirements.txt and redeploy.") from error
 
+    # Keep search resilient: one blocked result should not abort all candidates.
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -1582,13 +1583,14 @@ def search_youtube_song(query: str) -> dict:
         "extract_flat": "in_playlist",
         "default_search": "ytsearch8",
         "noplaylist": True,
+        "ignoreerrors": True,
     }
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(f"ytsearch8:{query}", download=False)
 
-    entries = [entry for entry in (info or {}).get("entries", []) if entry]
+    entries = [entry for entry in (info or {}).get("entries", []) if entry and entry.get("id")]
     if not entries:
-        raise LookupError("No matching songs were found.")
+        raise LookupError("YouTube returned no usable search results. It may be temporarily blocking requests from this host.")
 
     wanted = normalize_song_text(query)
 
@@ -1602,39 +1604,57 @@ def search_youtube_song(query: str) -> dict:
         overlap = len(wanted_words & title_words) / max(1, len(wanted_words))
         return (0.72 * title_ratio) + (0.18 * combined_ratio) + (0.10 * overlap)
 
-    best = max(entries, key=score)
-    video_id = best.get("id")
-    webpage_url = best.get("webpage_url") or (f"https://www.youtube.com/watch?v={video_id}" if video_id else None)
-    if not webpage_url:
-        raise LookupError("The best search result did not include a playable link.")
-
-    # Re-extract the chosen result to get a direct audio stream URL.
+    # Try the closest title matches first. YouTube may reject one video while
+    # allowing another, so don't fail the entire request on the first error.
+    entries.sort(key=score, reverse=True)
+    failures = []
     stream_options = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "format": "bestaudio/best",
         "noplaylist": True,
+        # These are normal extractor preferences, not authentication credentials.
+        "extractor_args": {"youtube": {"player_client": ["mweb", "android_vr"]}},
     }
-    with yt_dlp.YoutubeDL(stream_options) as ydl:
-        full = ydl.extract_info(webpage_url, download=False)
 
-    formats = full.get("formats", []) if full else []
-    audio_formats = [
-        item for item in formats
-        if item.get("url") and item.get("acodec") not in (None, "none")
-    ]
-    audio_url = max(audio_formats, key=lambda item: item.get("abr") or item.get("tbr") or 0)["url"] if audio_formats else (full or {}).get("url")
-    if not audio_url:
-        raise LookupError("I found the song, but couldn't get an audio stream for it.")
+    for candidate in entries:
+        video_id = candidate.get("id")
+        webpage_url = candidate.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            with yt_dlp.YoutubeDL(stream_options) as ydl:
+                full = ydl.extract_info(webpage_url, download=False)
+            if not full:
+                continue
+            formats = full.get("formats", [])
+            audio_formats = [
+                item for item in formats
+                if item.get("url") and item.get("acodec") not in (None, "none")
+            ]
+            audio_url = (
+                max(audio_formats, key=lambda item: item.get("abr") or item.get("tbr") or 0)["url"]
+                if audio_formats else full.get("url")
+            )
+            if not audio_url:
+                continue
+            return {
+                "title": full.get("title", candidate.get("title", "Unknown title")),
+                "url": audio_url,
+                "webpage_url": full.get("webpage_url") or webpage_url,
+                "duration": full.get("duration"),
+                "requester": None,
+            }
+        except Exception as error:
+            failures.append(str(error).replace("\n", " ")[:220])
+            continue
 
-    return {
-        "title": (full or best).get("title", best.get("title", "Unknown title")),
-        "url": audio_url,
-        "webpage_url": (full or best).get("webpage_url") or webpage_url,
-        "duration": (full or best).get("duration"),
-        "requester": None,
-    }
+    if failures and any("Sign in to confirm" in failure or "not a bot" in failure.lower() for failure in failures):
+        raise RuntimeError(
+            "YouTube is blocking audio extraction from this hosting server. I tried multiple search results, "
+            "but they were rejected. This needs a supported alternative audio source or valid server-side "
+            "authentication; reinstalling yt-dlp alone won't fix it."
+        )
+    raise LookupError("I found search results, but none could be played. Try another query or audio source.")
 
 
 def format_track_duration(seconds) -> str:
