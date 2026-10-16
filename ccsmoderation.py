@@ -1576,14 +1576,16 @@ def normalize_song_text(value: str) -> str:
 # Spotify URL support uses the official Web API for metadata only.
 # Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in the hosting panel.
 _spotify_token_cache = {"access_token": None, "expires_at": 0}
+_spotify_user_token_cache = {"access_token": None, "expires_at": 0}
 
 
-def spotify_api_get(url: str):
-    """GET Spotify Web API JSON using the client-credentials flow."""
+def spotify_api_get(url: str, *, user_auth: bool = False):
+    """GET Spotify Web API JSON. Playlist items require a user-authorized token."""
     import json
     import time
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError, URLError
+    from urllib.parse import urlencode
 
     client_id = os.getenv("SPOTIFY_CLIENT_ID")
     client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -1593,12 +1595,29 @@ def spotify_api_get(url: str):
             "set as environment variables on the hosting panel."
         )
 
-    token = _spotify_token_cache.get("access_token")
-    if not token or time.time() >= _spotify_token_cache.get("expires_at", 0):
+    cache = _spotify_user_token_cache if user_auth else _spotify_token_cache
+    if user_auth:
+        refresh_token = os.getenv("SPOTIFY_REFRESH_TOKEN")
+        if not refresh_token:
+            raise RuntimeError(
+                "Spotify playlist reading needs SPOTIFY_REFRESH_TOKEN. Run the included "
+                "get_spotify_refresh_token.py helper, authorize the Spotify account that owns "
+                "the playlist, and add its refresh token to the hosting panel."
+            )
+
+    token = cache.get("access_token")
+    if not token or time.time() >= cache.get("expires_at", 0):
         credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        if user_auth:
+            form_data = urlencode({
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }).encode()
+        else:
+            form_data = b"grant_type=client_credentials"
         token_request = Request(
             "https://accounts.spotify.com/api/token",
-            data=b"grant_type=client_credentials",
+            data=form_data,
             headers={
                 "Authorization": f"Basic {credentials}",
                 "Content-Type": "application/x-www-form-urlencoded",
@@ -1609,14 +1628,19 @@ def spotify_api_get(url: str):
             with urlopen(token_request, timeout=15) as response:
                 token_data = json.loads(response.read().decode("utf-8"))
         except Exception as error:
+            if user_auth:
+                raise RuntimeError(
+                    "Couldn't refresh Spotify user authorization. Re-run "
+                    "get_spotify_refresh_token.py and update SPOTIFY_REFRESH_TOKEN."
+                ) from error
             raise RuntimeError(
                 "Couldn't authenticate with Spotify. Check the Client ID/Secret and app access."
             ) from error
         token = token_data.get("access_token")
         if not token:
             raise RuntimeError("Spotify didn't return an access token for this app.")
-        _spotify_token_cache["access_token"] = token
-        _spotify_token_cache["expires_at"] = time.time() + int(token_data.get("expires_in", 3600)) - 60
+        cache["access_token"] = token
+        cache["expires_at"] = time.time() + int(token_data.get("expires_in", 3600)) - 60
 
     request = Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
@@ -1624,12 +1648,17 @@ def spotify_api_get(url: str):
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         if error.code == 401:
-            _spotify_token_cache["access_token"] = None
+            cache["access_token"] = None
             raise RuntimeError("Spotify authentication expired; try the command again.") from error
         if error.code == 403:
+            if user_auth:
+                raise RuntimeError(
+                    "Spotify still denied this playlist. Make sure the authorized Spotify account "
+                    "owns the playlist or collaborates on it, and re-authorize with the "
+                    "playlist-read-private scope."
+                ) from error
             raise RuntimeError(
-                "Spotify denied access to this item. Make sure the track/playlist is public "
-                "and your developer app has API access."
+                "Spotify denied access to this item. Check your Spotify developer app's API access."
             ) from error
         if error.code == 404:
             raise RuntimeError("That Spotify track, album, or playlist could not be found.") from error
@@ -1641,7 +1670,8 @@ def spotify_api_get(url: str):
 def spotify_tracks_from_url(value: str):
     """
     Return Spotify metadata for a track, album, or playlist URL.
-    Returns None for non-Spotify inputs. This does not provide audio streams.
+    Playlist items use user authorization because Spotify no longer allows
+    client-credentials access to playlist contents in Development Mode.
     """
     match = re.search(
         r"(?:https?://)?open\.spotify\.com/(track|album|playlist)/([A-Za-z0-9]+)",
@@ -1664,8 +1694,27 @@ def spotify_tracks_from_url(value: str):
         for item in items:
             item.setdefault("album", {"name": album.get("name", "")})
     else:
-        playlist = spotify_api_get(f"https://api.spotify.com/v1/playlists/{spotify_id}/tracks?limit=50")
-        items = [entry.get("track") for entry in playlist.get("items", []) if entry.get("track")]
+        # Spotify renamed /tracks to /items and now requires a user-authorized
+        # token for playlist contents. Fetch up to 25 tracks across pages.
+        items = []
+        offset = 0
+        while len(items) < 25:
+            page = spotify_api_get(
+                f"https://api.spotify.com/v1/playlists/{spotify_id}/items?limit=50&offset={offset}",
+                user_auth=True,
+            )
+            entries = page.get("items", [])
+            if not entries:
+                break
+            for entry in entries:
+                track = entry.get("item") or entry.get("track")  # support legacy-shaped responses too
+                if track:
+                    items.append(track)
+                if len(items) >= 25:
+                    break
+            if not page.get("next"):
+                break
+            offset += len(entries)
 
     tracks = []
     for item in items:
@@ -1681,7 +1730,6 @@ def spotify_tracks_from_url(value: str):
             "artists": artists or "Unknown artist",
             "spotify_url": item.get("external_urls", {}).get("spotify", value),
         })
-        # Avoid turning a giant playlist into hundreds of extraction attempts.
         if len(tracks) >= 25:
             break
 
