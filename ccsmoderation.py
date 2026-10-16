@@ -1317,6 +1317,7 @@ async def help_command(ctx: commands.Context):
             f"`{get_guild_prefix(ctx.guild)}join` — Join the voice channel you're in.\n"
             f"`{get_guild_prefix(ctx.guild)}leave` — Leave voice (you must be in the same VC as the bot).\n"
             f"`{get_guild_prefix(ctx.guild)}play <song>` — Search and play a song in your VC; joins automatically if disconnected.\n"
+            f"`{get_guild_prefix(ctx.guild)}p <url>` — Play a direct media URL or Spotify track/album/playlist link.\n"
             f"`{get_guild_prefix(ctx.guild)}pause` / `{get_guild_prefix(ctx.guild)}unpause` — Pause or resume.\n"
             f"`{get_guild_prefix(ctx.guild)}skip` / `{get_guild_prefix(ctx.guild)}previous` — Change tracks.\n"
             f"`{get_guild_prefix(ctx.guild)}queue` — Show the current track and upcoming songs.\n"
@@ -2060,6 +2061,112 @@ async def play(ctx: commands.Context, *, song: str):
         )
         title = "🎵 Spotify Queue Started"
 
+    await send_embed(ctx, description, title=title, color=discord.Color.green())
+
+
+@bot.hybrid_command(name="p", description="Play a track or playlist from a URL.")
+@commands.guild_only()
+async def p(ctx: commands.Context, *, url: str):
+    """Play a direct media URL or resolve Spotify track/album/playlist links."""
+    url = url.strip().strip("<>")
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        await send_error(ctx, "❌ Give me a valid URL. Example: `?p https://...`")
+        return
+
+    if not isinstance(ctx.author, discord.Member) or not ctx.author.voice or not ctx.author.voice.channel:
+        await send_error(ctx, "❌ Join a voice channel first.")
+        return
+
+    voice_channel = ctx.author.voice.channel
+    voice = ctx.guild.voice_client
+    try:
+        if voice is None or not voice.is_connected():
+            voice = await voice_channel.connect()
+        elif voice.channel != voice_channel:
+            await send_error(
+                ctx,
+                f"❌ I'm already in {voice.channel.mention}. Join that voice channel to use music; I won't move away from the channel I'm in.",
+            )
+            return
+    except (discord.Forbidden, discord.HTTPException) as error:
+        await send_error(ctx, f"❌ I couldn't join that voice channel: `{error}`")
+        return
+
+    await ctx.send(f"🔗 Resolving URL: {clean_text(url, 180)}…")
+    try:
+        spotify_tracks = await asyncio.to_thread(spotify_tracks_from_url, url)
+        if spotify_tracks is not None:
+            resolved_tracks = []
+            for item in spotify_tracks:
+                query = f"{item['title']} {item.get('artists', '')}".strip()
+                track = await asyncio.to_thread(search_youtube_song, query)
+                track["spotify_url"] = item.get("spotify_url")
+                track["requester"] = ctx.author.id
+                track["text_channel_id"] = ctx.channel.id
+                resolved_tracks.append(track)
+        else:
+            # Direct YouTube/media URLs are passed to yt-dlp as URLs, not search text.
+            track = await asyncio.to_thread(search_youtube_song, url)
+            track["spotify_url"] = None
+            track["requester"] = ctx.author.id
+            track["text_channel_id"] = ctx.channel.id
+            resolved_tracks = [track]
+    except (LookupError, RuntimeError) as error:
+        await send_error(ctx, f"❌ {error}")
+        return
+    except Exception as error:
+        print(f"URL music resolution failed: {error!r}")
+        await send_error(ctx, "❌ I couldn't resolve that URL. Check the host logs for details.")
+        return
+
+    if not resolved_tracks:
+        await send_error(ctx, "❌ That URL didn't contain any tracks I could queue.")
+        return
+
+    session = get_music_session(ctx.guild.id)
+    was_busy = voice.is_playing() or voice.is_paused() or session.get("current") is not None
+    if was_busy:
+        session["queue"].extend(resolved_tracks)
+        first_position = len(session["queue"]) - len(resolved_tracks) + 1
+        if len(resolved_tracks) == 1:
+            track = resolved_tracks[0]
+            await send_embed(
+                ctx,
+                f"➕ Added **[{track['title']}]({track['webpage_url']})** to the queue at position `{first_position}`.",
+                title="🎵 Added from URL",
+                color=discord.Color.green(),
+            )
+        else:
+            await send_embed(
+                ctx,
+                f"➕ Added `{len(resolved_tracks)}` tracks from the URL to the queue "
+                f"(positions `{first_position}`–`{first_position + len(resolved_tracks) - 1}`).",
+                title="🎵 URL Tracks Queued",
+                color=discord.Color.green(),
+            )
+        return
+
+    first_track, *remaining_tracks = resolved_tracks
+    session["queue"].extend(remaining_tracks)
+    try:
+        await start_music_track(ctx.guild, first_track, remember_current=False)
+    except Exception as error:
+        print(f"Could not start URL music: {error!r}")
+        await send_error(ctx, "❌ I couldn't start playback. Make sure FFmpeg is installed on the host.")
+        return
+
+    if remaining_tracks:
+        description = (
+            f"🎶 Started **[{first_track['title']}]({first_track['webpage_url']})** and queued "
+            f"`{len(remaining_tracks)}` more track(s).\nRequested by {ctx.author.mention}"
+        )
+        title = "🎵 URL Queue Started"
+    else:
+        description = (
+            f"🎶 Now playing **[{first_track['title']}]({first_track['webpage_url']})**\n"
+            f"Requested by {ctx.author.mention} • `{format_track_duration(first_track.get('duration'))}`"
+        )
+        title = "🎵 Now Playing from URL"
     await send_embed(ctx, description, title=title, color=discord.Color.green())
 
 
