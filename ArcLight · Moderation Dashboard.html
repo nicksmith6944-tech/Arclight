@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>ArcLight · Moderation Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#07060b;--p1:#0e0c16;--p2:#15121f;--bd:#241f35;--tx:#ece9f7;--mu:#8d87a8;--ac:#8b5cf6;--ac2:#c084fc;--ok:#34d399;--wn:#fbbf24;--er:#f87171;--r:14px}
+html[data-t=midnight]{--bg:#05070f;--p1:#0b0f1c;--p2:#111729;--bd:#1d2640;--ac:#6366f1;--ac2:#a5b4fc}
+html[data-t=light]{--bg:#f5f3fb;--p1:#fff;--p2:#f0edfa;--bd:#ddd6f0;--tx:#1c1830;--mu:#6b6489}
+*{box-sizing:border-box;margin:0}body{font:14px/1.5 Inter,system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;min-height:100vh}
+button,input,select,textarea{font:inherit;color:inherit}svg.i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+aside{width:232px;background:var(--p1);border-right:1px solid var(--bd);padding:16px 12px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;transition:.25s;z-index:30}
+body.col aside{width:68px}body.col .lb{display:none}
+.logo{display:flex;gap:10px;align-items:center;font-weight:700;font-size:17px;padding:4px 8px 16px}.logo b{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:grid;place-items:center;box-shadow:0 0 18px #8b5cf666;color:#fff}
+.nv{display:flex;gap:12px;align-items:center;padding:10px 12px;border-radius:10px;color:var(--mu);cursor:pointer;border:0;background:0;width:100%;text-align:left}
+.nv:hover{background:var(--p2);color:var(--tx)}.nv.on{background:linear-gradient(90deg,#8b5cf633,transparent);color:var(--tx);box-shadow:inset 2px 0 var(--ac)}
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+header{display:flex;gap:10px;align-items:center;padding:12px 24px;border-bottom:1px solid var(--bd);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(12px);z-index:20}
+.sp{flex:1}.ib{background:var(--p1);border:1px solid var(--bd);border-radius:10px;padding:8px;cursor:pointer;display:grid;place-items:center;position:relative}.ib:hover{border-color:var(--ac)}
+.dot{position:absolute;top:-4px;right:-4px;background:var(--er);color:#fff;border-radius:9px;font-size:10px;padding:0 5px}
+#view{padding:24px;max-width:1300px;width:100%;margin:auto;animation:in .3s}@keyframes in{from{opacity:0;transform:translateY(6px)}}
+h1{font-size:22px}h2{font-size:15px;margin-bottom:10px}.sub{color:var(--mu);font-size:13px}
+.g{display:grid;gap:16px}.g4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.c{background:var(--p1);border:1px solid var(--bd);border-radius:var(--r);padding:18px;box-shadow:0 8px 24px #0004}.st{transition:.2s}.st:hover{transform:translateY(-2px);border-color:var(--ac);box-shadow:0 0 24px #8b5cf622}
+.st .n{font-size:28px;font-weight:700}
+.btn{background:var(--p2);border:1px solid var(--bd);border-radius:9px;padding:7px 13px;cursor:pointer;display:inline-flex;gap:6px;align-items:center;transition:.15s}.btn:hover{border-color:var(--ac)}
+.btn.pr{background:linear-gradient(135deg,var(--ac),#6d28d9);border:0;color:#fff;box-shadow:0 0 16px #8b5cf655}.btn.dn{color:var(--er)}.btn.dn:hover{border-color:var(--er)}
+input,select,textarea{background:var(--p2);border:1px solid var(--bd);border-radius:9px;padding:8px 11px;outline:0;max-width:100%}input:focus,select:focus,textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px #8b5cf633}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--bd);white-space:nowrap}th{color:var(--mu);font-weight:500;font-size:12px;cursor:pointer;user-select:none}tr.k{cursor:pointer}tr.k:hover{background:var(--p2)}
+.av{width:32px;height:32px;border-radius:50%;display:inline-grid;place-items:center;font-weight:700;font-size:13px;color:#fff;vertical-align:middle;margin-right:8px;position:relative}
+.tg{padding:2px 9px;border-radius:99px;font-size:12px;background:var(--p2);border:1px solid var(--bd)}.tg.warn{color:var(--wn)}.tg.ban,.tg.kick{color:var(--er)}.tg.mute,.tg.jail{color:var(--ac2)}.tg.unban,.tg.unjail,.tg.ok,.tg.resolved{color:var(--ok)}
+.fd{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--bd)}.fd:last-child{border:0}
+.sk{height:90px;border-radius:var(--r);background:linear-gradient(90deg,var(--p1),var(--p2),var(--p1));background-size:200%;animation:sh 1s infinite}@keyframes sh{to{background-position:-200%}}
+.em{text-align:center;color:var(--mu);padding:36px}
+.ov{position:fixed;inset:0;background:#000a;display:grid;place-items:center;z-index:60;padding:16px}.md{background:var(--p1);border:1px solid var(--bd);border-radius:var(--r);padding:22px;width:min(480px,100%);max-height:90vh;overflow:auto;box-shadow:0 0 50px #8b5cf633}
+.fl{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}.fl label{color:var(--mu);font-size:12px}.fl input,.fl select,.fl textarea{width:100%}.er{color:var(--er);font-size:12px;min-height:0}
+.dr{position:fixed;right:0;top:0;bottom:0;width:min(380px,100%);background:var(--p1);border-left:1px solid var(--bd);padding:22px;z-index:50;overflow:auto;animation:in .25s}
+.pop{position:absolute;right:0;top:46px;width:310px;background:var(--p1);border:1px solid var(--bd);border-radius:var(--r);padding:10px;z-index:40;box-shadow:0 12px 40px #0008}.pop .it{padding:8px;border-radius:8px;cursor:pointer}.pop .it:hover{background:var(--p2)}
+#toasts{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:8px;z-index:90}.ts{background:var(--p2);border:1px solid var(--bd);border-left:3px solid var(--ok);padding:10px 14px;border-radius:10px;animation:in .25s}.ts.e{border-left-color:var(--er)}
+.sw{appearance:none;width:40px;height:22px;border-radius:99px;background:var(--bd);position:relative;cursor:pointer;padding:0;border:0;flex:none}.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}.sw:checked{background:var(--ac);box-shadow:0 0 12px #8b5cf688}.sw:checked::after{left:21px}
+.tr{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--bd)}
+.demo{background:#fbbf2422;color:var(--wn);padding:2px 8px;border-radius:6px;font-size:11px}
+code{background:var(--p2);padding:2px 6px;border-radius:6px;color:var(--ac2)}
+@media(max-width:860px){aside{position:fixed;left:-240px}body.mo aside{left:0}body.col aside{width:232px}body.col .lb{display:inline}#view{padding:14px}header{padding:10px 14px}.hm{display:none}}
+</style></head><body>
+<aside><div class="logo"><b>A</b><span class="lb">ArcLight</span></div><div id="nav"></div><div class="sp"></div><div class="sub lb" style="padding:8px"><span class="demo">DEMO ONLY</span><br>No real Discord actions.</div></aside>
+<main><header><button class="ib" id="tg" title="Toggle sidebar"></button><select id="srv" title="Switch demo server"></select><div class="sp"></div>
+<button class="ib hm" id="sb" title="Global search (Ctrl+K)" style="gap:6px;display:flex"></button>
+<div style="position:relative"><button class="ib" id="nb" title="Notifications"></button><div id="np"></div></div>
+<div style="position:relative"><button class="ib" id="pb" title="Profile" style="padding:4px 10px">Mod ▾</button><div id="pp"></div></div></header>
+<div id="view"></div></main><div id="toasts"></div><div id="layer"></div>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const P={home:'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',users:'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M21 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',shield:'M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z',file:'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M9 14h6M9 18h6',gear:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19 12a7 7 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2.2-1.3L14 3h-4l-.4 2.5a7 7 0 0 0-2.2 1.3l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.6l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2.2 1.3L10 21h4l.4-2.5a7 7 0 0 0 2.2-1.3l2.3 1 2-3.4-2-1.5c.1-.4.1-.9.1-1.3',term:'M4 17l6-6-6-6M12 19h8',menu:'M3 6h18M3 12h18M3 18h18',bell:'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M10 21h4',search:'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16M21 21l-4.3-4.3',dl:'M12 3v12M7 10l5 5 5-5M4 21h16',x:'M18 6L6 18M6 6l12 12'};
+const ic=n=>`<svg class="i" viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;
+const PAGES=[['home','Overview','home'],['members','Members','users'],['mod','Moderation','shield'],['cases','Warnings & Cases','file'],['settings','Settings','gear'],['cmds','Commands','term']];
+const ACT=['warn','mute','kick','ban','unban','purge','jail','unjail'],MODS=['Phantom','Daksh','Mizi','Winter'];
+// ---------- data ----------
+function rng(s){return()=>(s=(s*16807)%2147483647)/2147483647}
+function seed(id,name,sd){const r=rng(sd),N=['Nova','Kairo','Lyra','Orion','Zephyr','Mira','Atlas','Juno','Ember','Vex','Sable','Rune','Echo','Piper','Onyx','Wren','Dax','Iris','Cato','Luna','Fenn','Opal','Rex','Tess','Yuki','Blaze','Cleo','Drift'];
+const rl=['Member','Member','Member','VIP','Booster','Moderator'],stt=['online','online','idle','offline','offline'],m=[],now=Date.now();
+for(let i=0;i<28;i++)m.push({id:String(Math.floor(1e17+r()*9e17)),name:N[i]+(r()>.5?Math.floor(r()*99):''),roles:[rl[Math.floor(r()*6)]],joined:new Date(now-r()*400*864e5).toISOString().slice(0,10),status:stt[Math.floor(r()*5)],state:'ok'});
+const logs=[],cases=[];for(let i=0;i<34;i++){const t=m[Math.floor(r()*m.length)],a=ACT[Math.floor(r()*8)],rs=['Spam in #general','Advertising','Toxic behavior','Raid participation','NSFW content','Ignoring staff','Appeal accepted'][Math.floor(r()*7)];
+const L={id:i+1,type:a,target:t.id,mod:MODS[Math.floor(r()*4)],reason:rs,ts:new Date(now-r()*7*864e5).toISOString(),dur:a=='mute'?['10m','1h','1d'][Math.floor(r()*3)]:''};logs.push(L);
+if(a=='warn')cases.push({id:'C-'+String(cases.length+101),target:t.id,mod:L.mod,reason:rs,status:r()>.6?'resolved':'open',ts:L.ts,hist:[{ts:L.ts,t:'Case opened by '+L.mod}]})}
+logs.sort((a,b)=>b.ts.localeCompare(a.ts));
+return{id,name,desc:'A friendly community moderated by ArcLight.',prefix:',',logch:'#mod-actions',jail:'Jailed',thr:{mute:3,kick:5,ban:7},tog:{antispam:true,antilink:false,joins:true,auto:false,dm:true},members:m,logs,cases,growth:Array.from({length:7},(_,i)=>m.length*20+i*14+Math.floor(r()*20))}}
+const SV=[['s1','Phantom Lounge',7],['s2','Pixel Guild',11],['s3','Night Owls',23]];
+function fresh(){return{cur:'s1',theme:'dark',srv:Object.fromEntries(SV.map(([i,n,s])=>[i,seed(i,n,s)])),notifs:[{id:1,t:'Welcome to ArcLight — all actions here are simulated.',r:false}]}}
+let S;try{S=JSON.parse(localStorage.getItem('arclight')||'null')}catch(e){}S=S||fresh();
+const save=()=>{try{localStorage.setItem('arclight',JSON.stringify(S))}catch(e){}};
+const G=()=>S.srv[S.cur],mem=id=>G().members.find(m=>m.id==id),nm=id=>mem(id)?.name||'Unknown';
+const warns=id=>G().cases.filter(c=>c.target==id&&c.status=='open').length;
+const col=s=>`hsl(${[...s].reduce((a,c)=>a+c.charCodeAt(0)*7,0)%360} 55% 45%)`;
+const av=m=>`<span class="av" style="background:${col(m.name)}">${esc(m.name[0])}</span>`;
+const dt=s=>new Date(s).toLocaleString([],{dateStyle:'medium',timeStyle:'short'});
+const ago=s=>{const m=(Date.now()-new Date(s))/6e4;return m<60?Math.max(1,Math.round(m))+'m ago':m<1440?Math.round(m/60)+'h ago':Math.round(m/1440)+'d ago'};
+function toast(t,e){const d=document.createElement('div');d.className='ts'+(e?' e':'');d.textContent=t;$('#toasts').append(d);setTimeout(()=>d.remove(),3200)}
+function notify(t){S.notifs.unshift({id:Date.now(),t,r:false});S.notifs=S.notifs.slice(0,30)}
+function modal(html,onMount){const l=$('#layer');l.innerHTML=`<div class="ov" onclick="if(event.target==this)closeL()"><div class="md" role="dialog">${html}</div></div>`;onMount&&onMount(l)}
+const closeL=()=>$('#layer').innerHTML='';
+function confirmD(t,msg,fn){modal(`<h2>${t}</h2><p class="sub" style="margin-bottom:16px">${msg}</p><span class="demo">Demo only — nothing is sent to Discord</span><div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" onclick="closeL()">Cancel</button><button class="btn pr" id="ok">Confirm</button></div>`,l=>l.querySelector('#ok').onclick=()=>{closeL();fn()})}
+// ---------- actions ----------
+function parseDur(v){const m=/^(\d+)\s*([smhd])$/i.exec(v.trim());if(!m)return null;const s=+m[1]*{s:1,m:60,h:3600,d:86400}[m[2].toLowerCase()];return s>0?s:null}
+function act(type,id,reason,dur,by='You'){const g=G(),m=mem(id);if(!m)return toast('Member not found',1);
+const st={mute:'muted',jail:'jailed',ban:'banned',unban:'ok',unjail:'ok'}[type];if(type=='kick'){g.members=g.members.filter(x=>x.id!=id)}else if(st)m.state=st;
+if(type=='unmute')m.state='ok';
+g.logs.unshift({id:g.logs.length+1,type,target:id,mod:by,reason,ts:new Date().toISOString(),dur:dur||''});
+if(type=='warn'){g.cases.unshift({id:'C-'+(101+g.cases.length),target:id,mod:by,reason,status:'open',ts:new Date().toISOString(),hist:[{ts:new Date().toISOString(),t:'Case opened by '+by}]});
+const w=warns(id);const t=g.thr;if(w>=t.ban)notify(`${m.name} reached the ban threshold (${w} warnings)`);else if(w>=t.kick)notify(`${m.name} reached the kick threshold (${w})`);else if(w>=t.mute)notify(`${m.name} reached the mute threshold (${w})`)}
+notify(`[Demo] ${type} → ${m.name}`);save();toast(`Demo ${type} applied to ${m.name}`);render()}
+// ---------- charts ----------
+function barChart(d,lab){const mx=Math.max(...d,1);return`<svg viewBox="0 0 320 140" width="100%">${d.map((v,i)=>{const h=v/mx*100,x=12+i*44;return`<g><title>${lab[i]}: ${v} actions</title><rect x="${x}" y="${115-h}" width="30" height="${h}" rx="6" fill="url(#gr)"/><text x="${x+15}" y="132" fill="var(--mu)" font-size="10" text-anchor="middle">${lab[i]}</text><text x="${x+15}" y="${110-h}" fill="var(--tx)" font-size="10" text-anchor="middle">${v}</text></g>`}).join('')}<defs><linearGradient id="gr" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#c084fc"/><stop offset="1" stop-color="#6d28d9"/></linearGradient></defs></svg>`}
+function lineChart(d,lab){const mn=Math.min(...d)-10,mx=Math.max(...d)+10,pt=d.map((v,i)=>[20+i*46,110-(v-mn)/(mx-mn)*95]),p=pt.map(a=>a.join(',')).join(' ');return`<svg viewBox="0 0 320 140" width="100%"><polygon points="20,115 ${p} 296,115" fill="#8b5cf622"/><polyline points="${p}" fill="none" stroke="var(--ac2)" stroke-width="2.5"/>${pt.map((a,i)=>`<circle cx="${a[0]}" cy="${a[1]}" r="4" fill="var(--ac)"><title>${lab[i]}: ${d[i]} members</title></circle><text x="${a[0]}" y="132" fill="var(--mu)" font-size="10" text-anchor="middle">${lab[i]}</text>`).join('')}</svg>`}
+const days=()=>Array.from({length:7},(_,i)=>{const d=new Date(Date.now()-(6-i)*864e5);return d.toISOString().slice(0,10)});
+// ---------- pages ----------
+const U={mq:'',role:'',stat:'',sort:'name',asc:1,pg:0,lq:'',lt:'',lm:'',ltg:'',ld:'',cq:'',cs:'',csort:'ts'};
+const PG={
+home(){const g=G(),d=days(),cnt=d.map(x=>g.logs.filter(l=>l.ts.slice(0,10)==x).length),on=g.members.filter(m=>m.status!='offline').length,
+open=g.cases.filter(c=>c.status=='open').length,mu=g.members.filter(m=>m.state=='muted').length;
+const stat=(l,n,t)=>`<div class="c st" title="${t}"><div class="sub">${l}</div><div class="n">${n}</div></div>`;
+return`<div class="row"><span class="av" style="background:${col(g.name)};width:48px;height:48px;font-size:20px">${esc(g.name[0])}</span><div><h1>${esc(g.name)}</h1><div class="sub">${g.members.length} members · ${on} online · <span class="demo">DEMO DATA</span></div></div></div>
+<div class="g g4">${stat('Total Members',g.members.length,'All members in this demo server')}${stat('Moderation Actions',g.logs.length,'Logged actions')}${stat('Active Warnings',open,'Open warning cases')}${stat('Muted Now',mu,'Members currently timed out')}</div>
+<div class="row" style="margin:16px 0">${[['warn','Warn'],['mute','Timeout'],['ban','Ban']].map(a=>`<button class="btn pr" onclick="quickAct('${a[0]}')">${a[1]} a member</button>`).join('')}<button class="btn" onclick="go('mod')">Open mod log</button><button class="btn" onclick="exportCSV()">${ic('dl')} Export CSV</button></div>
+<div class="g g2"><div class="c"><h2>Moderation activity · 7 days</h2>${barChart(cnt,d.map(x=>x.slice(5)))}</div><div class="c"><h2>Member growth</h2>${lineChart(g.growth,d.map(x=>x.slice(5)))}</div>
+<div class="c" style="grid-column:1/-1"><h2>Recent activity</h2>${g.logs.slice(0,7).map(l=>`<div class="fd"><span class="tg ${l.type}">${l.type}</span><div style="flex:1"><b>${esc(nm(l.target))}</b> <span class="sub">by ${esc(l.mod)} — ${esc(l.reason)}</span></div><span class="sub">${ago(l.ts)}</span></div>`).join('')||'<div class="em">No activity yet</div>'}</div></div>`},
+members(){const g=G(),roles=[...new Set(g.members.flatMap(m=>m.roles))];let a=g.members.filter(m=>(m.name+m.id).toLowerCase().includes(U.mq.toLowerCase())&&(!U.role||m.roles.includes(U.role))&&(!U.stat||m.status==U.stat));
+a.sort((x,y)=>(String(x[U.sort])>String(y[U.sort])?1:-1)*U.asc);const pages=Math.max(1,Math.ceil(a.length/8));U.pg=Math.min(U.pg,pages-1);
+const th=(k,l)=>`<th onclick="U.sort='${k}';U.asc=U.sort=='${k}'&&U.asc==1&&U._k=='${k}'?-1:1;U._k='${k}';render()" title="Sort by ${l}">${l}${U.sort==k?(U.asc>0?' ▲':' ▼'):''}</th>`;
+return`<h1>Members</h1><p class="sub" style="margin-bottom:14px">Click a row for details.</p><div class="row"><input placeholder="Search name or ID…" value="${esc(U.mq)}" oninput="U.mq=this.value;U.pg=0;render('mq')" id="mq">
+<select onchange="U.role=this.value;U.pg=0;render()"><option value="">All roles</option>${roles.map(r=>`<option ${U.role==r?'selected':''}>${r}</option>`).join('')}</select>
+<select onchange="U.stat=this.value;U.pg=0;render()"><option value="">Any status</option>${['online','idle','offline'].map(r=>`<option ${U.stat==r?'selected':''}>${r}</option>`).join('')}</select></div>
+<div class="c tw"><table><tr>${th('name','Member')}<th>ID</th>${th('roles','Role')}${th('joined','Joined')}${th('status','Status')}<th>State</th></tr>
+${a.slice(U.pg*8,U.pg*8+8).map(m=>`<tr class="k" onclick="drawer('${m.id}')"><td>${av(m)}${esc(m.name)}</td><td class="sub">${m.id}</td><td>${m.roles}</td><td>${m.joined}</td><td>${m.status}</td><td><span class="tg ${m.state}">${m.state=='ok'?'active':m.state}</span></td></tr>`).join('')}</table>${a.length?'':'<div class="em">No members match your filters.</div>'}</div>
+<div class="row" style="margin-top:12px;justify-content:center"><button class="btn" ${U.pg?'':'disabled'} onclick="U.pg--;render()">‹ Prev</button><span class="sub">Page ${U.pg+1} / ${pages} · ${a.length} results</span><button class="btn" ${U.pg<pages-1?'':'disabled'} onclick="U.pg++;render()">Next ›</button></div>`},
+mod(){const g=G();let a=g.logs.filter(l=>(!U.lt||l.type==U.lt)&&(!U.lm||l.mod==U.lm)&&nm(l.target).toLowerCase().includes(U.lq.toLowerCase())&&(!U.ld||l.ts.slice(0,10)>=U.ld));
+return`<div class="row"><h1 style="flex:1">Moderation Center</h1><span class="demo">SIMULATED ACTIONS</span><button class="btn" onclick="exportCSV()" title="Download filtered log as CSV">${ic('dl')} Export CSV</button></div>
+<div class="g g2"><div class="c"><h2>Issue an action</h2><div class="fl"><label>Member</label><select id="fm">${g.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+<div class="fl"><label>Action</label><select id="fa" onchange="$('#fdw').style.display=this.value=='mute'?'':'none'">${['warn','mute','kick','ban','unban','jail','unjail'].map(x=>`<option>${x}</option>`).join('')}</select></div>
+<div class="fl" id="fdw" style="display:none"><label>Duration (e.g. 30s, 10m, 2h, 7d — max 28d)</label><input id="fd" placeholder="10m"></div>
+<div class="fl"><label>Reason</label><textarea id="fr" rows="2" placeholder="Why?"></textarea></div><div class="er" id="fe"></div><button class="btn pr" onclick="submitAct()">Simulate action</button></div>
+<div class="c"><h2>Log filters</h2><div class="row"><input placeholder="Target member…" value="${esc(U.lq)}" id="lq" oninput="U.lq=this.value;render('lq')"><select onchange="U.lt=this.value;render()"><option value="">All types</option>${ACT.map(x=>`<option ${U.lt==x?'selected':''}>${x}</option>`).join('')}</select>
+<select onchange="U.lm=this.value;render()"><option value="">All moderators</option>${[...new Set([...MODS,'You'])].map(x=>`<option ${U.lm==x?'selected':''}>${x}</option>`).join('')}</select><input type="date" value="${U.ld}" onchange="U.ld=this.value;render()" title="Show entries since"></div><p class="sub">${a.length} of ${g.logs.length} entries shown.</p></div></div>
+<div class="c tw" style="margin-top:16px"><table><tr><th>#</th><th>Type</th><th>Target</th><th>Moderator</th><th>Reason</th><th>When</th></tr>${a.slice(0,40).map(l=>`<tr class="k" onclick="logModal(${l.id})"><td>${l.id}</td><td><span class="tg ${l.type}">${l.type}</span></td><td>${esc(nm(l.target))}</td><td>${esc(l.mod)}</td><td>${esc(l.reason)}</td><td>${ago(l.ts)}</td></tr>`).join('')}</table>${a.length?'':'<div class="em">No log entries match.</div>'}</div>`},
+cases(){const g=G();let a=g.cases.filter(c=>(c.id+nm(c.target)+c.reason).toLowerCase().includes(U.cq.toLowerCase())&&(!U.cs||c.status==U.cs));a.sort((x,y)=>U.csort=='ts'?y.ts.localeCompare(x.ts):String(x[U.csort]).localeCompare(String(y[U.csort])));
+const top=g.members.map(m=>[m,warns(m.id)]).filter(x=>x[1]).sort((x,y)=>y[1]-x[1]).slice(0,5);
+return`<div class="row"><h1 style="flex:1">Warnings & Cases</h1><button class="btn pr" onclick="newCase()">+ New case</button></div>
+<div class="c" style="margin-bottom:16px"><h2>Active warnings by member</h2>${top.map(([m,n])=>`<span class="tg warn" style="margin-right:8px;cursor:pointer" onclick="drawer('${m.id}')">${esc(m.name)} · ${n}</span>`).join('')||'<span class="sub">No active warnings.</span>'}</div>
+<div class="row"><input placeholder="Search cases…" id="cq" value="${esc(U.cq)}" oninput="U.cq=this.value;render('cq')"><select onchange="U.cs=this.value;render()"><option value="">All statuses</option><option ${U.cs=='open'?'selected':''}>open</option><option ${U.cs=='resolved'?'selected':''}>resolved</option></select>
+<select onchange="U.csort=this.value;render()" title="Sort cases"><option value="ts">Newest</option><option value="mod" ${U.csort=='mod'?'selected':''}>Moderator</option><option value="status" ${U.csort=='status'?'selected':''}>Status</option></select></div>
+<div class="c tw"><table><tr><th>Case</th><th>Member</th><th>Warns</th><th>Moderator</th><th>Reason</th><th>Status</th></tr>${a.map(c=>`<tr class="k" onclick="caseModal('${c.id}')"><td>${c.id}</td><td>${esc(nm(c.target))}</td><td>${warns(c.target)}</td><td>${esc(c.mod)}</td><td>${esc(c.reason)}</td><td><span class="tg ${c.status}">${c.status}</span></td></tr>`).join('')}</table>${a.length?'':'<div class="em">No cases found.</div>'}</div>`},
+settings(){const g=G(),T=(k,l,d)=>`<div class="tr"><div><b>${l}</b><div class="sub">${d}</div></div><input type="checkbox" class="sw" ${g.tog[k]?'checked':''} onchange="G().tog['${k}']=this.checked;save();toast('${l} '+(this.checked?'enabled':'disabled'))"></div>`;
+return`<h1 style="margin-bottom:14px">Server Settings</h1><div class="g g2"><div class="c"><h2>General</h2>
+<div class="fl"><label>Server name</label><input id="sn" value="${esc(g.name)}" maxlength="40"></div><div class="fl"><label>Description</label><textarea id="sd" rows="2">${esc(g.desc)}</textarea></div>
+<div class="fl"><label>Command prefix (≤5 chars, no spaces — as in the bot)</label><input id="sp" value="${esc(g.prefix)}"></div>
+<div class="fl"><label>Moderation log channel</label><select id="sl">${['#mod-actions','#audit-log','#staff-chat','(disabled)'].map(x=>`<option ${g.logch==x?'selected':''}>${x}</option>`).join('')}</select></div>
+<div class="fl"><label>Jail role</label><input id="sj" value="${esc(g.jail)}"></div><div class="er" id="se"></div><button class="btn pr" onclick="saveSettings()">Save settings</button></div>
+<div class="c"><h2>Warning thresholds</h2>${['mute','kick','ban'].map(k=>`<div class="tr"><span>Auto-${k} at</span><input type="number" min="1" max="50" style="width:80px" value="${g.thr[k]}" onchange="saveThr('${k}',this)"></div>`).join('')}<p class="sub" style="margin-top:8px">Reaching a threshold raises a notification (demo).</p>
+<h2 style="margin-top:18px">Theme</h2><select onchange="S.theme=this.value;save();applyTheme()">${[['dark','Deep purple'],['midnight','Midnight indigo'],['light','Light']].map(t=>`<option value="${t[0]}" ${S.theme==t[0]?'selected':''}>${t[1]}</option>`).join('')}</select></div>
+<div class="c" style="grid-column:1/-1"><h2>Features</h2>${T('antispam','Anti-spam','Flag rapid repeated messages (preview feature)')}${T('antilink','Anti-link','Remove unapproved invite links (preview feature)')}${T('joins','Join notifications','Post a notice when members join')}${T('auto','Automatic moderation','Apply thresholds automatically')}${T('dm','DM on action','Message members when moderated (matches the bot)')}</div></div>`},
+cmds(){const p=G().prefix,C=[['warn <member> [reason]','Warn a member and increase their warning count.'],['mute <member> <10m> [reason]','Timeout a member (max 28 days).'],['unmute <member>','Remove a timeout.'],['kick <member> [reason]','Kick a member.'],['ban <member> [reason]','Permanently ban a member.'],['unban <user_id>','Unban by ID.'],['jail <member>','Jail a member and save their roles.'],['unjail <member>','Release and restore roles.'],['purge <n> [user]','Delete recent messages.'],['warns <member>','Show warning count.'],['modlogs <member>','Show moderation history.'],['note / notes <member>','Add or list private notes.'],['ms','7-day, 30-day and all-time stats.'],['setprefix <p>','Change the bot prefix.'],['setlogs <#channel>','Set the log channel.'],['stick / unstick','Manage sticky messages.']];
+return`<div class="row"><h1 style="flex:1">Command Reference</h1><input id="cmq" placeholder="Filter commands…" oninput="filterCmds(this.value)"></div><div class="g g2" id="cl">${C.map(c=>`<div class="c cmd st" data-q="${c[0]} ${c[1]}"><code>${esc(p)}${esc(c[0])}</code><p class="sub" style="margin:8px 0">${c[1]}</p><button class="btn" onclick="navigator.clipboard?.writeText('${esc(p)}${c[0].replace(/'/g,'')}');toast('Copied')">Copy</button></div>`).join('')}</div>`}};
+// ---------- UI logic ----------
+let page=localStorage.getItem('arc_page')||'home';
+function render(focus){const v=$('#view');v.innerHTML=PG[page]();if(focus){const e=$('#'+focus);if(e){e.focus();e.setSelectionRange?.(e.value.length,e.value.length)}}
+$('#nav').innerHTML=PAGES.map(p=>`<button class="nv ${p[0]==page?'on':''}" onclick="go('${p[0]}')" title="${p[1]} (Alt+${PAGES.indexOf(p)+1})">${ic(p[2])}<span class="lb">${p[1]}</span></button>`).join('');
+$('#srv').innerHTML=SV.map(s=>`<option value="${s[0]}" ${S.cur==s[0]?'selected':''}>${esc(S.srv[s[0]].name)}</option>`).join('');
+const un=S.notifs.filter(n=>!n.r).length;$('#nb').innerHTML=ic('bell')+(un?`<span class="dot">${un}</span>`:'');}
+function go(p){page=p;localStorage.setItem('arc_page',p);document.body.classList.remove('mo');$('#view').innerHTML='<div class="g g4">'+'<div class="sk"></div>'.repeat(4)+'</div>';setTimeout(()=>render(),220);$('#nav').querySelectorAll('.nv').forEach((b,i)=>b.classList.toggle('on',PAGES[i][0]==p))}
+function drawer(id){const m=mem(id);if(!m)return;const l=$('#layer');const h=G().logs.filter(x=>x.target==id).slice(0,5);
+l.innerHTML=`<div class="dr"><div class="row"><b style="flex:1">Member details</b><button class="ib" onclick="closeL()">${ic('x')}</button></div><div style="text-align:center"><span class="av" style="margin:0;width:64px;height:64px;font-size:26px;background:${col(m.name)}">${esc(m.name[0])}</span><h2 style="margin-top:8px">${esc(m.name)}</h2><div class="sub">${m.id}</div></div>
+<div class="tr"><span>Roles</span><b>${m.roles}</b></div><div class="tr"><span>Joined</span><b>${m.joined}</b></div><div class="tr"><span>Status</span><b>${m.status}</b></div><div class="tr"><span>State</span><span class="tg ${m.state}">${m.state}</span></div><div class="tr"><span>Active warnings</span><b>${warns(id)}</b></div>
+<span class="demo" style="display:inline-block;margin:12px 0">Demo-only actions</span><div class="row"><button class="btn" onclick="quick('warn','${id}')">Warn</button><button class="btn" onclick="quick('mute','${id}')">Timeout</button><button class="btn dn" onclick="conf('kick','${id}')">Kick</button><button class="btn dn" onclick="conf('ban','${id}')">Ban</button><button class="btn" onclick="conf('unban','${id}')">Unban</button></div>
+<h2>Recent history</h2>${h.map(x=>`<div class="fd"><span class="tg ${x.type}">${x.type}</span><span class="sub">${esc(x.reason)} · ${ago(x.ts)}</span></div>`).join('')||'<div class="sub">No history.</div>'}</div>`}
+function conf(t,id){if(t=='unban'&&mem(id).state!='banned')return toast('Member is not banned',1);if(t=='ban'&&mem(id).state=='banned')return toast('Already banned',1);confirmD(t[0].toUpperCase()+t.slice(1)+' '+esc(nm(id))+'?','This is a destructive action (simulated).',()=>{act(t,id,'Via dashboard');closeL()})}
+function quick(t,id){modal(`<h2>${t=='mute'?'Timeout':'Warn'} ${esc(nm(id))}</h2><span class="demo">Demo only</span>${t=='mute'?'<div class="fl"><label>Duration</label><input id="qd" placeholder="10m"></div>':''}<div class="fl"><label>Reason</label><input id="qr"></div><div class="er" id="qe"></div><div class="row"><button class="btn" onclick="closeL()">Cancel</button><button class="btn pr" id="qo">Apply</button></div>`,l=>l.querySelector('#qo').onclick=()=>{const r=$('#qr').value.trim(),d=t=='mute'?$('#qd').value:'';
+if(r.length<3)return $('#qe').textContent='Reason must be at least 3 characters.';if(t=='mute'){const s=parseDur(d);if(!s)return $('#qe').textContent='Use a duration like 30s, 10m, 2h, 7d.';if(s>2419200)return $('#qe').textContent='Timeouts cannot exceed 28 days.'}closeL();act(t,id,r,d)})}
+function quickAct(t){go('mod');setTimeout(()=>{$('#fa').value=t;$('#fa').onchange()},320)}
+function submitAct(){const t=$('#fa').value,id=$('#fm').value,r=$('#fr').value.trim(),m=mem(id);let e='';
+if(r.length<3)e='Reason must be at least 3 characters.';else if(t=='mute'){const s=parseDur($('#fd').value);if(!s)e='Duration must look like 30s, 10m, 2h or 7d.';else if(s>2419200)e='Timeouts cannot exceed 28 days.'}
+else if(t=='unban'&&m.state!='banned')e='That member is not banned.';else if(t=='unjail'&&m.state!='jailed')e='That member is not jailed.';else if(t=='ban'&&m.state=='banned')e='Already banned.';
+$('#fe').textContent=e;if(e)return toast(e,1);act(t,id,r,t=='mute'?$('#fd').value:'')}
+function logModal(id){const l=G().logs.find(x=>x.id==id);modal(`<h2>Entry #${l.id} <span class="tg ${l.type}">${l.type}</span></h2>${[['Target',nm(l.target)],['Target ID',l.target],['Moderator',l.mod],['Reason',l.reason],['Duration',l.dur||'—'],['Time',dt(l.ts)]].map(r=>`<div class="tr"><span class="sub">${r[0]}</span><b>${esc(r[1])}</b></div>`).join('')}<div class="row" style="margin:14px 0 0;justify-content:flex-end"><button class="btn" onclick="closeL()">Close</button></div>`)}
+function caseModal(id){const c=G().cases.find(x=>x.id==id);modal(`<h2>${c.id} <span class="tg ${c.status}">${c.status}</span></h2><div class="tr"><span class="sub">Member</span><b>${esc(nm(c.target))}</b></div><div class="tr"><span class="sub">Moderator</span><b>${esc(c.mod)}</b></div><div class="tr"><span class="sub">Reason</span><b>${esc(c.reason)}</b></div><div class="tr"><span class="sub">Opened</span><b>${dt(c.ts)}</b></div>
+<h2 style="margin-top:14px">History</h2>${c.hist.map(h=>`<div class="fd"><span class="sub">${dt(h.ts)}</span><span>${esc(h.t)}</span></div>`).join('')}<div class="row" style="margin:14px 0 0;justify-content:flex-end"><button class="btn" onclick="closeL()">Close</button>${c.status=='open'?`<button class="btn pr" onclick="resolveCase('${c.id}')">Resolve</button>`:`<button class="btn" onclick="resolveCase('${c.id}',1)">Reopen</button>`}</div>`)}
+function resolveCase(id,re){const c=G().cases.find(x=>x.id==id);c.status=re?'open':'resolved';c.hist.push({ts:new Date().toISOString(),t:(re?'Reopened':'Resolved')+' by You'});save();closeL();toast('Case '+c.status);render()}
+function newCase(){const g=G();modal(`<h2>New case</h2><span class="demo">Demo only</span><div class="fl" style="margin-top:10px"><label>Member</label><select id="nc">${g.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div><div class="fl"><label>Reason</label><textarea id="nr" rows="2"></textarea></div><div class="er" id="ne"></div><div class="row"><button class="btn" onclick="closeL()">Cancel</button><button class="btn pr" id="no">Create</button></div>`,l=>l.querySelector('#no').onclick=()=>{const r=$('#nr').value.trim();if(r.length<3)return $('#ne').textContent='Reason must be at least 3 characters.';closeL();act('warn',$('#nc').value,r)})}
+function saveSettings(){const n=$('#sn').value.trim(),p=$('#sp').value;let e='';if(!n)e='Server name is required.';else if(!p||p.length>5||/\s/.test(p))e='Prefix must be 1–5 characters with no spaces.';$('#se').textContent=e;if(e)return toast(e,1);
+const g=G();Object.assign(g,{name:n,desc:$('#sd').value,prefix:p,logch:$('#sl').value,jail:$('#sj').value.trim()||'Jailed'});save();toast('Settings saved');render()}
+function saveThr(k,el){const v=+el.value;if(!(v>=1&&v<=50)){el.value=G().thr[k];return toast('Threshold must be 1–50',1)}G().thr[k]=v;save();toast('Threshold updated')}
+function filterCmds(q){document.querySelectorAll('.cmd').forEach(c=>c.style.display=c.dataset.q.toLowerCase().includes(q.toLowerCase())?'':'none')}
+function exportCSV(){const g=G();const rows=[['id','type','target','target_id','moderator','reason','duration','timestamp'],...g.logs.map(l=>[l.id,l.type,nm(l.target),l.target,l.mod,l.reason,l.dur,l.ts])];
+const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n'),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='arclight-modlog-demo.csv';a.click();toast('CSV exported ('+g.logs.length+' rows)')}
+function globalSearch(){modal(`<input id="gq" placeholder="Search members, cases, commands, pages…" style="width:100%" autofocus><div id="gr" style="margin-top:10px"></div>`,()=>{const f=()=>{const q=$('#gq').value.toLowerCase().trim(),g=G(),r=[];if(q){PAGES.forEach(p=>p[1].toLowerCase().includes(q)&&r.push([p[1],'Page',`go('${p[0]}')`]));
+g.members.filter(m=>m.name.toLowerCase().includes(q)||m.id.includes(q)).slice(0,5).forEach(m=>r.push([m.name,'Member',`drawer('${m.id}')`]));g.cases.filter(c=>(c.id+c.reason).toLowerCase().includes(q)).slice(0,4).forEach(c=>r.push([c.id+' · '+c.reason,'Case',`caseModal('${c.id}')`]))}
+$('#gr').innerHTML=r.length?r.map(x=>`<div class="fd" style="cursor:pointer" onclick="closeL();${x[2]}"><span class="tg">${x[1]}</span>${esc(x[0])}</div>`).join(''):`<div class="em">${q?'No results':'Start typing…'}</div>`};$('#gq').oninput=f;f();$('#gq').focus()})}
+function applyTheme(){document.documentElement.dataset.t=S.theme}
+// header wiring
+$('#tg').innerHTML=ic('menu');$('#sb').innerHTML=ic('search')+'<span class="sub">Ctrl K</span>';$('#tg').onclick=()=>innerWidth<861?document.body.classList.toggle('mo'):document.body.classList.toggle('col');$('#sb').onclick=globalSearch;
+$('#srv').onchange=e=>{S.cur=e.target.value;U.pg=0;save();toast('Switched to '+G().name);go(page)};
+$('#nb').onclick=e=>{e.stopPropagation();$('#pp').innerHTML='';const p=$('#np');if(p.innerHTML){p.innerHTML='';return}S.notifs.forEach(n=>n.r=true);const list=S.notifs;save();
+p.innerHTML=`<div class="pop"><div class="row" style="margin-bottom:4px"><b style="flex:1">Notifications</b><button class="btn" onclick="S.notifs=[];save();render();$('#np').innerHTML=''">Clear</button></div>${list.map(n=>`<div class="it">${esc(n.t)}</div>`).join('')||'<div class="em">You\'re all caught up.</div>'}</div>`;render()};
+$('#pb').onclick=e=>{e.stopPropagation();$('#np').innerHTML='';const p=$('#pp');p.innerHTML=p.innerHTML?'':`<div class="pop" style="width:230px"><div class="it" onclick="S.theme=S.theme=='light'?'dark':'light';save();applyTheme()">Toggle light / dark</div><div class="it" onclick="exportCSV()">Export mod log</div><div class="it" onclick="go('settings')">Server settings</div><div class="it" style="color:var(--er)" onclick="confirmD('Reset demo data?','All changes in every demo server will be lost.',()=>{S=fresh();save();applyTheme();go('home');toast('Demo reset')})">Reset demo data</div></div>`};
+document.addEventListener('click',e=>{if(!e.target.closest('.pop'))['#np','#pp'].forEach(s=>$(s).innerHTML='')});
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key=='k'||e.key=='/'&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){e.preventDefault();globalSearch()}
+else if(e.key=='Escape')closeL();else if(e.altKey&&PAGES[+e.key-1])go(PAGES[+e.key-1][0])});
+applyTheme();go(PAGE_OK(page));function PAGE_OK(p){return PG[p]?p:'home'}
+</script></body></html>
